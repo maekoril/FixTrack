@@ -1,6 +1,7 @@
 import { StrictMode, useState, type FormEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 import './style.css';
+import { Admin } from './Admin';
 
 type User = { id: string; full_name: string; email: string; role: string };
 type Branch = { id: string; name: string; location: string };
@@ -10,6 +11,15 @@ function App() {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [token, setToken] = useState<string | null>(null);
+
+  function signOut() { setToken(null); setUser(null); setBranches([]); }
+  async function refreshBranches() {
+    const response = await fetch('/api/branches', { headers: { Authorization: `Bearer ${token}` } });
+    if (response.status === 401) { signOut(); throw new Error('Your session expired. Sign in again.'); }
+    if (!response.ok) throw new Error('Unable to refresh branches.');
+    setBranches(await response.json());
+  }
 
   async function login(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -30,7 +40,7 @@ function App() {
       if (!profile.ok || !branchResponse.ok) throw new Error('Unable to load your workspace.');
       const nextUser: User = await profile.json();
       const nextBranches: Branch[] = await branchResponse.json();
-      setBranches(nextBranches); setUser(nextUser);
+      setBranches(nextBranches); setUser(nextUser); setToken(access_token);
     } catch (err) {
       setError(err instanceof TypeError ? 'Cannot connect to FixTrack. Check that the API is running.'
         : err instanceof Error ? err.message : 'Unable to sign in.');
@@ -53,7 +63,7 @@ function App() {
           <strong>{branch.name}</strong><small>{branch.location}</small></li>)}</ul>
           : <p>No branch access assigned. Contact your administrator.</p>}
         <p className="note">Your account is ready. Request and work-order tools are the next development milestone.</p>
-        <button className="secondary" onClick={() => { setUser(null); setBranches([]); }}>Sign out</button>
+        <button className="secondary" onClick={signOut}>Sign out</button>
       </section> : <section className="card" aria-labelledby="signin">
         <p className="eyebrow">WELCOME BACK</p><h2 id="signin">Sign in to FixTrack</h2>
         <p className="muted">Use the account provided by your administrator.</p>
@@ -66,7 +76,10 @@ function App() {
           <button disabled={busy}>{busy ? 'Signing in…' : 'Sign in →'}</button>
         </form><p className="note">Need access? Ask your project administrator to set up your account.</p>
       </section>}
-    </main><footer>FixTrack <span>Service you can trace. Progress you can see.</span></footer>
+    </main>
+    {user?.role === 'administrator' && token && <Admin token={token} branches={branches}
+      refreshBranches={refreshBranches} onExpired={signOut} />}
+    <footer>FixTrack <span>Service you can trace. Progress you can see.</span></footer>
   </div>;
 }
 

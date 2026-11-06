@@ -3,8 +3,9 @@
 A multi-branch maintenance and service request system for reporting issues, assigning repairs,
 recording actions and costs, and verifying resolution.
 
-**Status:** development foundation. Authentication, branch visibility, and the initial schema
-are implemented. Request/repair screens and workflow APIs are upcoming.
+**Status:** development foundation. Authentication, branch visibility, administrator account
+creation/access controls, branch creation, and the initial schema are implemented.
+Request/repair screens and workflow APIs are upcoming.
 
 ## Repository layout
 
