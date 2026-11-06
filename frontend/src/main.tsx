@@ -2,6 +2,7 @@ import { StrictMode, useState, type FormEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 import './style.css';
 import { Admin } from './Admin';
+import { Requests } from './Requests';
 
 type User = { id: string; full_name: string; email: string; role: string };
 type Branch = { id: string; name: string; location: string };
@@ -12,8 +13,9 @@ function App() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [token, setToken] = useState<string | null>(null);
+  const [tab, setTab] = useState<'requests' | 'admin'>('requests');
 
-  function signOut() { setToken(null); setUser(null); setBranches([]); }
+  function signOut() { setToken(null); setUser(null); setBranches([]); setTab('requests'); }
   async function refreshBranches() {
     const response = await fetch('/api/branches', { headers: { Authorization: `Bearer ${token}` } });
     if (response.status === 401) { signOut(); throw new Error('Your session expired. Sign in again.'); }
@@ -50,21 +52,19 @@ function App() {
   return <div className="shell">
     <header><a className="brand" href="/" aria-label="FixTrack home"><span>F</span>FixTrack</a>
       <span className="tag">Maintenance, connected.</span></header>
-    <main>
+    {user && token ? <main className="workspace">
+      <div className="workspace-heading"><div><p className="eyebrow">{user.role} WORKSPACE</p><h1>Welcome, {user.full_name}</h1></div><button className="secondary" onClick={signOut}>Sign out</button></div>
+      <nav className="workspace-tabs" aria-label="Workspace"><button aria-current={tab === 'requests' ? 'page' : undefined} onClick={() => setTab('requests')}>Service requests</button>
+        {user.role === 'administrator' && <button aria-current={tab === 'admin' ? 'page' : undefined} onClick={() => setTab('admin')}>People & branches</button>}</nav>
+      {tab === 'requests' ? <Requests token={token} role={user.role} branches={branches} onExpired={signOut} />
+        : <Admin token={token} branches={branches} refreshBranches={refreshBranches} onExpired={signOut} />}
+    </main> : <main>
       <section className="intro"><p className="eyebrow">MULTI-BRANCH MAINTENANCE</p>
         <h1>Keep every branch<br />moving forward.</h1>
         <p className="lede">One place to report issues, coordinate repairs, and keep a clear service history.</p>
         <div className="steps"><span>01 &nbsp; Report</span><span>02 &nbsp; Repair</span><span>03 &nbsp; Resolve</span></div>
       </section>
-      {user ? <section className="card" aria-labelledby="welcome">
-        <p className="eyebrow">YOUR WORKSPACE</p><h2 id="welcome">Welcome, {user.full_name}</h2>
-        <p className="role">{user.role}</p><h3>Your branches</h3>
-        {branches.length ? <ul>{branches.map(branch => <li key={branch.id}>
-          <strong>{branch.name}</strong><small>{branch.location}</small></li>)}</ul>
-          : <p>No branch access assigned. Contact your administrator.</p>}
-        <p className="note">Your account is ready. Request and work-order tools are the next development milestone.</p>
-        <button className="secondary" onClick={signOut}>Sign out</button>
-      </section> : <section className="card" aria-labelledby="signin">
+      <section className="card" aria-labelledby="signin">
         <p className="eyebrow">WELCOME BACK</p><h2 id="signin">Sign in to FixTrack</h2>
         <p className="muted">Use the account provided by your administrator.</p>
         <form onSubmit={login}>
@@ -75,10 +75,8 @@ function App() {
           {error && <p className="error" role="alert">{error}</p>}
           <button disabled={busy}>{busy ? 'Signing in…' : 'Sign in →'}</button>
         </form><p className="note">Need access? Ask your project administrator to set up your account.</p>
-      </section>}
-    </main>
-    {user?.role === 'administrator' && token && <Admin token={token} branches={branches}
-      refreshBranches={refreshBranches} onExpired={signOut} />}
+      </section>
+    </main>}
     <footer>FixTrack <span>Service you can trace. Progress you can see.</span></footer>
   </div>;
 }
