@@ -132,6 +132,97 @@ def test_validation_and_role_rules(client, account, people):
     assert client.get(f"/api/requests/{uuid.uuid4()}", headers=auth(employee)).status_code == 404
 
 
+def test_initial_work_order_assignment(client, db, account, people):
+    branch, outside, employee, _, outsider, technician = people
+    outside_tech = User(
+        email="outside-tech@example.com",
+        full_name="Outside technician",
+        role=Role.technician,
+        password_hash=account.password_hash,
+    )
+    db.add(outside_tech)
+    db.flush()
+    db.add(BranchAccess(user_id=outside_tech.id, branch_id=outside.id))
+    db.commit()
+
+    own = client.post("/api/requests", headers=auth(employee), json=report(branch.id)).json()
+    foreign = client.post("/api/requests", headers=auth(outsider), json=report(outside.id)).json()
+    path = f"/api/requests/{own['id']}"
+    assignment = f"{path}/work-orders"
+    admin = auth(account)
+    payload = {"technician_id": str(technician.id)}
+    assert client.get(path, headers=admin).json()["eligible_technicians"] == [
+        {"id": str(technician.id), "full_name": technician.full_name}
+    ]
+    assert client.get(path, headers=auth(employee)).json()["eligible_technicians"] is None
+    assert client.post(assignment, headers=auth(employee), json=payload).status_code == 403
+    assert (
+        client.post(
+            f"/api/requests/{foreign['id']}/work-orders", headers=admin, json=payload
+        ).status_code
+        == 404
+    )
+    for ineligible in (employee, outside_tech):
+        assert (
+            client.post(
+                assignment, headers=admin, json={"technician_id": str(ineligible.id)}
+            ).status_code
+            == 422
+        )
+    technician.is_active = False
+    db.commit()
+    assert client.get(path, headers=admin).json()["eligible_technicians"] == []
+    assert client.post(assignment, headers=admin, json=payload).status_code == 422
+    technician.is_active = True
+    db.commit()
+
+    response = client.post(assignment, headers=admin, json=payload)
+    assert response.status_code == 201
+    order = response.json()
+    assert order["technician_id"] == str(technician.id) and order["status"] == "assigned"
+    assert client.post(assignment, headers=admin, json=payload).status_code == 409
+    assert client.get("/api/requests", headers=auth(technician)).json() == [own]
+    assert client.get(path, headers=auth(outside_tech)).status_code == 404
+    detail = client.get(path, headers=admin).json()
+    assert detail["eligible_technicians"] is None
+    assert detail["status"] == "submitted"
+    assigned = [event for event in detail["events"] if event["action"] == "work_order_assigned"]
+    assert len(assigned) == 1
+    assert assigned[0]["actor_name"] == account.full_name
+    assert assigned[0]["details"] == {
+        "work_order_id": order["id"],
+        "technician_name": technician.full_name,
+    }
+
+    technician_auth = auth(technician)
+    assert client.get(path, headers=technician_auth).json()["work_orders"] == [order]
+    start = f"{assignment}/{order['id']}/start"
+    assert client.post(start, headers=admin).status_code == 403
+    assert client.post(start, headers=auth(outside_tech)).status_code == 404
+    assert (
+        client.post(f"{assignment}/{uuid.uuid4()}/start", headers=technician_auth).status_code
+        == 404
+    )
+
+    grant = db.get(BranchAccess, (technician.id, branch.id))
+    db.delete(grant)
+    db.commit()
+    assert client.post(start, headers=technician_auth).status_code == 404
+    db.add(BranchAccess(user_id=technician.id, branch_id=branch.id))
+    db.commit()
+
+    for _ in range(2):
+        started = client.post(start, headers=technician_auth)
+        assert started.status_code == 200
+        assert started.json() == order | {"status": "in_progress"}
+    detail = client.get(path, headers=auth(employee)).json()
+    assert detail["status"] == "in_progress"
+    events = [event for event in detail["events"] if event["action"] == "work_started"]
+    assert len(events) == 1
+    assert events[0]["actor_name"] == technician.full_name
+    assert events[0]["details"] == {"work_order_id": order["id"]}
+
+
 def test_asset_scope_and_optional_link(client, db, people):
     branch, outside, employee, *_ = people
     asset = Asset(branch_id=branch.id, asset_tag="AC-1", name="AC", condition="broken")

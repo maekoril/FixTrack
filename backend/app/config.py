@@ -9,6 +9,7 @@ class Settings(BaseSettings):
 
     database_url: str
     jwt_secret: str = Field(min_length=32)
+    setup_token: str | None = Field(default=None, min_length=32)
     cors_origins: list[str] = ["http://localhost:5173"]
     access_token_minutes: int = Field(default=30, ge=1, le=1440)
 

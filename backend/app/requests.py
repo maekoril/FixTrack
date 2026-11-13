@@ -12,6 +12,7 @@ from app.db import get_db
 from app.models import (
     Asset,
     Branch,
+    BranchAccess,
     Priority,
     RequestEvent,
     RequestStatus,
@@ -19,6 +20,7 @@ from app.models import (
     ServiceRequest,
     User,
     WorkOrder,
+    WorkStatus,
 )
 from app.security import current_user
 
@@ -59,8 +61,25 @@ class EventOutput(BaseModel):
     details: dict
 
 
+class TechnicianOption(BaseModel):
+    id: uuid.UUID
+    full_name: str
+
+
+class AssignmentInput(BaseModel):
+    technician_id: uuid.UUID
+
+
+class WorkOrderOutput(BaseModel, from_attributes=True):
+    id: uuid.UUID
+    technician_id: uuid.UUID
+    status: WorkStatus
+
+
 class DetailOutput(RequestOutput):
     events: list[EventOutput]
+    eligible_technicians: list[TechnicianOption] | None = None
+    work_orders: list[WorkOrderOutput]
 
 
 class PriorityInput(BaseModel):
@@ -91,6 +110,22 @@ def output(request: ServiceRequest, db: Session) -> dict:
         "submitted_by_name": db.get(User, request.submitted_by).full_name,
         "asset_name": f"{asset.asset_tag} · {asset.name}" if asset else None,
     }
+
+
+def eligible_technicians(branch_id: uuid.UUID):
+    return (
+        select(User)
+        .join(BranchAccess, BranchAccess.user_id == User.id)
+        .where(BranchAccess.branch_id == branch_id, User.role == Role.technician, User.is_active)
+    )
+
+
+def can_assign(request: ServiceRequest, db: Session) -> bool:
+    return (
+        request.status == RequestStatus.submitted
+        and db.scalar(select(WorkOrder.id).where(WorkOrder.request_id == request.id).limit(1))
+        is None
+    )
 
 
 @router.post("", response_model=RequestOutput, status_code=201)
@@ -167,7 +202,24 @@ def detail(
         .where(RequestEvent.request_id == request.id)
         .order_by(RequestEvent.created_at, RequestEvent.id)
     ).all()
+    technicians = None
+    if user.role == Role.administrator and can_assign(request, db):
+        technicians = [
+            TechnicianOption(id=technician.id, full_name=technician.full_name)
+            for technician in db.scalars(
+                eligible_technicians(request.branch_id).order_by(User.full_name, User.id)
+            )
+        ]
+    work_orders = []
+    if user.role == Role.technician:
+        work_orders = db.scalars(
+            select(WorkOrder)
+            .where(WorkOrder.request_id == request.id, WorkOrder.technician_id == user.id)
+            .order_by(WorkOrder.created_at, WorkOrder.id)
+        ).all()
     return output(request, db) | {
+        "eligible_technicians": technicians,
+        "work_orders": work_orders,
         "events": [
             EventOutput(
                 id=event.id,
@@ -177,8 +229,87 @@ def detail(
                 details=event.details,
             )
             for event, name in events
-        ]
+        ],
     }
+
+
+@router.post("/{request_id}/work-orders", response_model=WorkOrderOutput, status_code=201)
+def assign_work_order(
+    request_id: uuid.UUID,
+    data: AssignmentInput,
+    user: User = Depends(administrator),
+    db: Session = Depends(get_db),
+):
+    request = db.scalar(visible(user, db).where(ServiceRequest.id == request_id).with_for_update())
+    if request is None:
+        raise HTTPException(404, "Service request not found")
+    if not can_assign(request, db):
+        raise HTTPException(409, "Only submitted requests without a work order can be assigned")
+    technician = db.scalar(
+        eligible_technicians(request.branch_id)
+        .where(User.id == data.technician_id)
+        .with_for_update()
+    )
+    if technician is None:
+        raise HTTPException(422, "Select an active technician with access to this branch")
+
+    work_order = WorkOrder(request_id=request.id, technician_id=technician.id, assigned_by=user.id)
+    db.add(work_order)
+    db.flush()
+    db.add(
+        RequestEvent(
+            request_id=request.id,
+            actor_id=user.id,
+            action="work_order_assigned",
+            details={"work_order_id": str(work_order.id), "technician_name": technician.full_name},
+        )
+    )
+    result = WorkOrderOutput.model_validate(work_order)
+    db.commit()
+    return result
+
+
+@router.post("/{request_id}/work-orders/{work_order_id}/start", response_model=WorkOrderOutput)
+def start_work_order(
+    request_id: uuid.UUID,
+    work_order_id: uuid.UUID,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+):
+    if user.role != Role.technician:
+        raise HTTPException(403, "Only technicians can start work orders")
+    request = db.scalar(visible(user, db).where(ServiceRequest.id == request_id).with_for_update())
+    if request is None:
+        raise HTTPException(404, "Work order not found")
+    work_order = db.scalar(
+        select(WorkOrder)
+        .where(
+            WorkOrder.id == work_order_id,
+            WorkOrder.request_id == request.id,
+            WorkOrder.technician_id == user.id,
+        )
+        .with_for_update()
+    )
+    if work_order is None:
+        raise HTTPException(404, "Work order not found")
+    if request.status == RequestStatus.in_progress and work_order.status == WorkStatus.in_progress:
+        return work_order
+    if request.status != RequestStatus.submitted or work_order.status != WorkStatus.assigned:
+        raise HTTPException(409, "Only assigned work on a submitted request can be started")
+
+    request.status = RequestStatus.in_progress
+    work_order.status = WorkStatus.in_progress
+    db.add(
+        RequestEvent(
+            request_id=request.id,
+            actor_id=user.id,
+            action="work_started",
+            details={"work_order_id": str(work_order.id)},
+        )
+    )
+    result = WorkOrderOutput.model_validate(work_order)
+    db.commit()
+    return result
 
 
 @router.patch("/{request_id}/priority", response_model=RequestOutput)

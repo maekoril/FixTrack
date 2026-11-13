@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
+import { Icon } from './Icon';
 
 type Branch = { id: string; name: string; location: string };
 type ManagedUser = { id: string; full_name: string; email: string; role: string;
@@ -61,24 +62,25 @@ export function Admin({ token, branches, refreshBranches, onExpired }: Props) {
 
   return <section className="admin-area" aria-labelledby="admin-title">
     <div className="section-heading"><div><p className="eyebrow">ADMINISTRATION</p>
-      <h2 id="admin-title">People & branches</h2></div>
-      <span className="muted">Manage access across your branches</span></div>
+      <h1 id="admin-title">People &amp; branches</h1>
+      <p className="muted">Create branch records and manage who can access them.</p></div></div>
     {error && <p className="error" role="alert">{error}</p>}
     {notice && <p className="success" role="status">{notice}</p>}
     <div className="admin-grid">
-      <section className="card"><h3>Create a branch</h3><form onSubmit={createBranch}>
+      <section className="card"><div className="panel-heading"><span className="icon-tile"><Icon name="branch" /></span><div><h2>Create a branch</h2><p className="muted">Add a location to your workspace.</p></div></div><form onSubmit={createBranch}>
         <fieldset disabled={busy}><label htmlFor="branch-name">Branch name</label>
           <input id="branch-name" name="name" required maxLength={120} />
           <label htmlFor="branch-location">Location</label>
           <input id="branch-location" name="location" required maxLength={255} />
           <button>Create branch</button></fieldset></form>
       </section>
-      <section className="card"><h3>Create an account</h3><form onSubmit={createUser}>
+      <section className="card"><div className="panel-heading"><span className="icon-tile"><Icon name="people" /></span><div><h2>Create an account</h2><p className="muted">Set a role and assign branch access.</p></div></div><form onSubmit={createUser}>
         <fieldset disabled={busy || branches.length === 0}>
           <label htmlFor="full-name">Full name</label><input id="full-name" name="full_name" required maxLength={150} />
           <label htmlFor="new-email">Email</label><input id="new-email" name="email" type="email" autoComplete="off" required />
-          <label htmlFor="new-password">Password (at least 12 characters)</label>
-          <input id="new-password" name="password" type="password" autoComplete="new-password" minLength={12} maxLength={128} required />
+          <label htmlFor="new-password">Password</label>
+          <input id="new-password" name="password" type="password" autoComplete="new-password" minLength={12} maxLength={128} required aria-describedby="password-hint" />
+          <p className="field-hint" id="password-hint">Use at least 12 characters.</p>
           <label htmlFor="new-role">Role</label><select id="new-role" name="role">
             <option value="employee">Employee</option><option value="technician">Technician</option></select>
           <BranchChecks branches={branches} />
@@ -88,11 +90,11 @@ export function Admin({ token, branches, refreshBranches, onExpired }: Props) {
         {!branches.length && <p>Create a branch first.</p>}
       </section>
     </div>
-    <section className="card user-list"><h3>Managed accounts</h3>
+    <section className="card user-list"><h2>Managed accounts</h2>
       <p className="muted">Employees and technicians whose branches are all within your access.</p>
       {loading ? <p role="status">Loading accounts…</p> : !users.length ? <p>No managed accounts yet.</p>
         : users.map(user => <article key={user.id} className="user-row">
-          <div><strong>{user.full_name}</strong><small>{user.email} · {user.role} · {user.is_active ? 'Active' : 'Disabled'}</small></div>
+          <div className="user-summary"><div><strong>{user.full_name}</strong><small>{user.email} · <span className="role">{user.role}</span></small></div><span className={`badge ${user.is_active ? 'priority-low' : 'priority-null'}`}>{user.is_active ? 'Active' : 'Disabled'}</span></div>
           <form onSubmit={event => {
             event.preventDefault(); const data = new FormData(event.currentTarget);
             void mutate(async () => {
