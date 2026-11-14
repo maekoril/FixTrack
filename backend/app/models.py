@@ -24,7 +24,7 @@ from app.db import Base
 
 
 class Role(str, enum.Enum):
-    employee = "employee"
+    branch_manager = "branch_manager"
     technician = "technician"
     administrator = "administrator"
 
@@ -137,6 +137,12 @@ class RequestEvent(Record, Base):
     actor_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
     action: Mapped[str] = mapped_column(String(80))
     details: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class NotificationRead(Base):
+    __tablename__ = "notification_reads"
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    event_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("request_events.id"), primary_key=True)
 
 
 class Attachment(Record, Base):

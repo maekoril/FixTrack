@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Icon } from './Icon';
+import { pollWhileVisible } from './liveUpdates';
 
 type Branch = { id: string; name: string };
 type Asset = { id: string; name: string; asset_tag: string };
@@ -8,16 +9,31 @@ type ServiceRequest = { id: string; title: string; description: string; location
   created_at: string; asset_name: string | null };
 type Detail = ServiceRequest & {
   eligible_technicians: { id: string; full_name: string }[] | null;
-  work_orders: { id: string; status: string }[];
+  work_orders: { id: string; technician_id: string; status: string; labor_cost: string; materials_cost: string }[];
+  maintenance_logs: { id: string; work_order_id: string; action: string; notes: string;
+    recorded_by_name: string; created_at: string }[];
   events: { id: string; action: string; actor_name: string;
-    created_at: string; details: { from?: string; to?: string; technician_name?: string } }[];
+    created_at: string; details: { from?: string; to?: string; technician_name?: string;
+      reason?: string; notes?: string; work_order_id?: string; previous_technician_name?: string } }[];
 };
-type Props = { token: string; role: string; branches: Branch[]; onExpired: () => void };
+type Props = { token: string; role: string; branches: Branch[]; onExpired: () => void; openedRequest: { id: string } };
 const pageSize = 25;
 const label = (value: string) => value.replaceAll('_', ' ');
 const date = (value: string) => new Date(value).toLocaleString();
 
-export function Requests({ token, role, branches, onExpired }: Props) {
+function MaintenanceHistory({ logs }: { logs: Detail['maintenance_logs'] }) {
+  if (!logs.length) return null;
+  return <>
+    <h4>Maintenance history</h4>
+    <ol className="timeline">{logs.map(log =>
+      <li key={log.id}><strong>{log.action}</strong>
+        <small>{log.recorded_by_name} · {date(log.created_at)}</small>
+        <p className="description">{log.notes}</p>
+      </li>)}</ol>
+  </>;
+}
+
+export function Requests({ token, role, branches, onExpired, openedRequest }: Props) {
   const [items, setItems] = useState<ServiceRequest[]>([]);
   const [detail, setDetail] = useState<Detail | null>(null);
   const detailPanel = useRef<HTMLElement>(null);
@@ -26,7 +42,7 @@ export function Requests({ token, role, branches, onExpired }: Props) {
   const reportHeading = useRef<HTMLHeadingElement>(null);
   const reportButton = useRef<HTMLButtonElement>(null);
   const [detailFailed, setDetailFailed] = useState(false);
-  const [selected, setSelected] = useState('');
+  const [selected, setSelected] = useState(openedRequest.id);
   const [branch, setBranch] = useState('');
   const [status, setStatus] = useState('');
   const [priority, setPriority] = useState('');
@@ -48,10 +64,15 @@ export function Requests({ token, role, branches, onExpired }: Props) {
     if (response.status === 401) { onExpired(); throw new Error('Your session expired. Sign in again.'); }
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
-      throw new Error(typeof data.detail === 'string' ? data.detail : 'Check the form values and try again.');
+      throw Object.assign(new Error(typeof data.detail === 'string' ? data.detail : 'Check the form values and try again.'),
+        { status: response.status });
     }
     return response.json();
   }
+
+  useEffect(() => {
+    if (openedRequest.id) setSelected(openedRequest.id);
+  }, [openedRequest]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -60,19 +81,46 @@ export function Requests({ token, role, branches, onExpired }: Props) {
     if (branch) query.set('branch_id', branch);
     if (status) query.set('status', status);
     if (priority) query.set('priority', priority);
-    api(`?${query}`, 'GET', undefined, controller.signal).then(setItems)
-      .catch(err => { if (!controller.signal.aborted) setError(err.message); })
-      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
-    return () => controller.abort();
+    let pending = false;
+    async function refresh(background = false) {
+      if (pending) return;
+      pending = true;
+      try {
+        const result = await api(`?${query}`, 'GET', undefined, controller.signal);
+        if (!controller.signal.aborted) setItems(result);
+      } catch (err) {
+        if (!background && !controller.signal.aborted && err instanceof Error) setError(err.message);
+      } finally {
+        pending = false;
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    }
+    void refresh();
+    const stop = pollWhileVisible(() => refresh(true));
+    return () => { controller.abort(); stop(); };
   }, [branch, status, priority, search, offset, version, token]);
 
   useEffect(() => {
     setDetail(null); setDetailFailed(false);
     if (!selected) return;
     const controller = new AbortController();
-    api(`/${selected}`, 'GET', undefined, controller.signal).then(setDetail)
-      .catch(err => { if (!controller.signal.aborted) { setError(err.message); setDetailFailed(true); } });
-    return () => controller.abort();
+    let pending = false;
+    async function refresh(background = false) {
+      if (pending) return;
+      pending = true;
+      try {
+        const result = await api(`/${selected}`, 'GET', undefined, controller.signal);
+        if (!controller.signal.aborted) { setDetail(result); setDetailFailed(false); }
+      } catch (err) {
+        if (!controller.signal.aborted && err instanceof Error &&
+          (!background || ('status' in err && err.status === 404))) {
+          setDetail(null); setError(err.message); setDetailFailed(true);
+        }
+      } finally { pending = false; }
+    }
+    void refresh();
+    const stop = pollWhileVisible(() => refresh(true));
+    return () => { controller.abort(); stop(); };
   }, [selected, version, token]);
 
   useEffect(() => {
@@ -126,22 +174,48 @@ export function Requests({ token, role, branches, onExpired }: Props) {
     finally { setBusy(false); }
   }
 
-  async function startWork(workOrderId: string) {
+  async function updateWork(workOrderId: string, operation: 'start' | 'logs' | 'complete' | 'reassign', data?: unknown) {
     if (!detail || detail.id !== selected || busy) return;
     setBusy(true); setError(''); setNotice('');
     try {
-      await api(`/${detail.id}/work-orders/${workOrderId}/start`, 'POST');
-      setVersion(v => v + 1); setNotice('Work started. The request is now in progress.');
-    } catch (err) { setError(err instanceof Error ? err.message : 'Unable to start work.'); }
+      await api(`/${detail.id}/work-orders/${workOrderId}/${operation}`, 'POST', data);
+      setVersion(v => v + 1);
+      setNotice({
+        start: 'Work started. The request is now in progress.',
+        logs: 'Maintenance entry added.',
+        complete: 'Work completed. The request is awaiting administrator verification.',
+        reassign: 'Work order reassigned.',
+      }[operation]);
+    } catch (err) { setError(err instanceof Error ? err.message : 'Unable to update work order.'); }
+    finally { setBusy(false); }
+  }
+
+  function submitWork(event: FormEvent<HTMLFormElement>, orderId: string, operation: 'logs' | 'complete') {
+    event.preventDefault();
+    void updateWork(orderId, operation, Object.fromEntries(new FormData(event.currentTarget)));
+  }
+
+  async function reviewWork(event: FormEvent<HTMLFormElement>, decision: 'verify' | 'return') {
+    event.preventDefault();
+    const order = detail?.work_orders.at(-1);
+    if (!detail || detail.id !== selected || !order || busy) return;
+    const fields = Object.fromEntries(new FormData(event.currentTarget));
+    setBusy(true); setError(''); setNotice('');
+    try {
+      await api(`/${detail.id}/${decision}`, 'POST', { ...fields, work_order_id: order.id });
+      setVersion(v => v + 1);
+      setNotice(decision === 'verify' ? 'Repair verified and request closed.'
+        : 'Repair returned and follow-up work assigned.');
+    } catch (err) { setError(err instanceof Error ? err.message : 'Unable to review the repair.'); }
     finally { setBusy(false); }
   }
 
   return <section className="requests-area" aria-labelledby="requests-title">
     <div className="section-heading"><div><p className="eyebrow">SERVICE DESK</p>
-      <h1 id="requests-title">{role === 'employee' ? 'My requests' : role === 'technician' ? 'Assigned requests' : 'Service requests'}</h1>
-      <p className="muted">{role === 'employee' ? 'Report equipment and facility issues and follow their progress.' : role === 'technician' ? 'Review service requests linked to your assigned work.' : 'Review branch issues, set priorities, and follow each request’s history.'}</p>
+      <h1 id="requests-title">{role === 'branch_manager' ? 'My requests' : role === 'technician' ? 'Assigned requests' : 'Service requests'}</h1>
+      <p className="muted">{role === 'branch_manager' ? 'Report equipment and facility issues and follow their progress.' : role === 'technician' ? 'Review service requests linked to your assigned work.' : 'Review branch issues, set priorities, and follow each request’s history.'}</p>
     </div><div className="actions"><button className="secondary" disabled={loading || busy} onClick={() => setVersion(v => v + 1)}><Icon name="refresh" size={17} />Refresh</button>
-      {role === 'employee' && <button ref={reportButton} className={showForm ? 'secondary' : undefined} aria-expanded={showForm} disabled={!branches.length || busy} onClick={() => setShowForm(!showForm)}>{showForm ? 'Cancel' : <><Icon name="plus" size={18} />Report an issue</>}</button>}</div></div>
+      {role === 'branch_manager' && <button ref={reportButton} className={showForm ? 'secondary' : undefined} aria-expanded={showForm} disabled={!branches.length || busy} onClick={() => setShowForm(!showForm)}>{showForm ? 'Cancel' : <><Icon name="plus" size={18} />Report an issue</>}</button>}</div></div>
     {error && <p className="error" role="alert">{error}</p>}
     {notice && <p className="success" role="status">{notice}</p>}
     {showForm && <section className="card report-form" aria-labelledby="report-title">
@@ -169,7 +243,7 @@ export function Requests({ token, role, branches, onExpired }: Props) {
     </div>
     <div className="request-layout"><div className="card queue">
       <div className="queue-heading"><h2 ref={queueHeading} tabIndex={-1}>Request queue</h2><span className="count">{loading ? 'Loading' : `${items.length} on this page`}</span></div>
-      {loading ? <p className="empty-state" role="status">Loading requests…</p> : !items.length ? <div className="empty-state"><span className="icon-tile"><Icon name="requests" /></span><h3>No requests found</h3><p className="muted">{search || branch || status || priority ? 'Try changing your search or filters.' : role === 'employee' ? 'Your reports will appear here once submitted.' : 'Requests will appear here when they’re available to you.'}</p></div>
+      {loading ? <p className="empty-state" role="status">Loading requests…</p> : !items.length ? <div className="empty-state"><span className="icon-tile"><Icon name="requests" /></span><h3>No requests found</h3><p className="muted">{search || branch || status || priority ? 'Try changing your search or filters.' : role === 'branch_manager' ? 'Your reports will appear here once submitted.' : 'Requests will appear here when they’re available to you.'}</p></div>
         : <div className="request-list">{items.map(item => <button key={item.id} ref={selected === item.id ? selectedButton : null} className={`request-item ${selected === item.id ? 'selected' : ''}`} onClick={() => { setSelected(item.id); setError(''); detailPanel.current?.focus(); }} aria-pressed={selected === item.id}>
           <span className="request-meta"><span className="reference">#{item.id.slice(0, 8).toUpperCase()}</span><span className={`badge priority-${item.priority}`}>{item.priority ?? 'Not prioritized'}</span></span>
           <strong className="request-title">{item.title}<Icon name="arrow" size={16} /></strong>
@@ -187,8 +261,8 @@ export function Requests({ token, role, branches, onExpired }: Props) {
           <div className="actions"><span className={`badge status-${detail.status}`}>{label(detail.status)}</span><span className={`badge priority-${detail.priority}`}>{detail.priority ?? 'Not prioritized'}</span></div>
           <dl><dt>Branch / location</dt><dd>{detail.branch_name} · {detail.location}</dd><dt>Related asset</dt><dd>{detail.asset_name ?? 'General facility issue / no registered asset'}</dd><dt>Reported by</dt><dd>{detail.submitted_by_name}</dd><dt>Submitted</dt><dd>{date(detail.created_at)}</dd></dl>
           <h3>Description</h3><p className="description">{detail.description}</p>
-          {role === 'administrator' && detail.status !== 'closed' && <form key={`${detail.id}-${detail.priority}`} onSubmit={prioritize}><label htmlFor="priority">Set priority</label><select id="priority" name="priority" defaultValue={detail.priority ?? ''} required disabled={busy}><option value="" disabled>Select priority</option>{['low', 'medium', 'high', 'urgent'].map(value => <option key={value} value={value}>{value}</option>)}</select><button disabled={busy}>Save priority</button></form>}
-          {detail.eligible_technicians && (detail.eligible_technicians.length ? (
+          {role === 'administrator' && detail.status !== 'closed' && <form key={detail.id} onSubmit={prioritize}><label htmlFor="priority">Set priority</label><select id="priority" name="priority" defaultValue={detail.priority ?? ''} required disabled={busy}><option value="" disabled>Select priority</option>{['low', 'medium', 'high', 'urgent'].map(value => <option key={value} value={value}>{value}</option>)}</select><button disabled={busy}>Save priority</button></form>}
+          {detail.status === 'submitted' && !detail.work_orders.length && detail.eligible_technicians && (detail.eligible_technicians.length ? (
             <form key={detail.id} onSubmit={assignTechnician}>
               <label htmlFor="technician">Technician</label>
               <select id="technician" name="technician_id" defaultValue="" required disabled={busy}>
@@ -198,15 +272,96 @@ export function Requests({ token, role, branches, onExpired }: Props) {
               <button disabled={busy}>Assign technician</button>
             </form>
           ) : <p className="muted">No active technicians have access to this branch.</p>)}
-          {role === 'technician' && detail.work_orders.length > 0 && <section>
+          {detail.work_orders.length > 0 && <section>
             <h3>Work orders</h3>
-            {detail.work_orders.map(order => <div key={order.id} className="actions">
+            {detail.work_orders.map(order => <section key={order.id} className="work-order">
               <span className={`badge status-${order.status}`}>{label(order.status)}</span>
-              {detail.status === 'submitted' && order.status === 'assigned' && (
-                <button type="button" disabled={busy} onClick={() => startWork(order.id)}>Start work</button>
+              {role === 'administrator' && ['submitted', 'in_progress'].includes(detail.status)
+                && ['assigned', 'in_progress'].includes(order.status) && (
+                detail.eligible_technicians?.some(technician => technician.id !== order.technician_id)
+                  ? <form onSubmit={event => {
+                    event.preventDefault();
+                    const data = Object.fromEntries(new FormData(event.currentTarget));
+                    void updateWork(order.id, 'reassign', { ...data, previous_technician_id: order.technician_id });
+                  }}>
+                    <fieldset disabled={busy}>
+                      <legend>Reassign work order</legend>
+                      <label htmlFor={`replacement-${order.id}`}>Replacement technician</label>
+                      <select id={`replacement-${order.id}`} name="technician_id" defaultValue="" required>
+                        <option value="" disabled>Select technician</option>
+                        {detail.eligible_technicians.filter(technician => technician.id !== order.technician_id)
+                          .map(technician => <option key={technician.id} value={technician.id}>{technician.full_name}</option>)}
+                      </select>
+                      <label htmlFor={`reassignment-reason-${order.id}`}>Reason for reassignment</label>
+                      <textarea id={`reassignment-reason-${order.id}`} name="reason" required maxLength={10000} rows={3} />
+                      <button className="secondary">Reassign technician</button>
+                    </fieldset>
+                  </form>
+                  : <p className="muted">No other active technician has access to this branch.</p>
               )}
-            </div>)}
+              {detail.events.filter(event => event.action === 'work_returned' &&
+                event.details.work_order_id === order.id).map(event =>
+                <div key={event.id}><h4>Follow-up instructions</h4><p className="description">{event.details.reason}</p></div>)}
+              {role === 'technician' && ['submitted', 'in_progress'].includes(detail.status) && order.status === 'assigned' && (
+                <button type="button" disabled={busy} onClick={() => updateWork(order.id, 'start')}>Start work</button>
+              )}
+              {order.status === 'completed' && <dl>
+                <dt>Labor cost</dt><dd>{order.labor_cost}</dd>
+                <dt>Materials cost</dt><dd>{order.materials_cost}</dd>
+              </dl>}
+              <MaintenanceHistory logs={detail.maintenance_logs.filter(log => log.work_order_id === order.id)} />
+              {role === 'technician' && detail.status === 'in_progress' && order.status === 'in_progress' && <>
+                <form onSubmit={event => submitWork(event, order.id, 'logs')}>
+                  <fieldset disabled={busy}>
+                    <label htmlFor={`action-${order.id}`}>Maintenance action</label>
+                    <input id={`action-${order.id}`} name="action" required maxLength={180} placeholder="e.g. Diagnosed leak" />
+                    <label htmlFor={`notes-${order.id}`}>Diagnosis or repair notes</label>
+                    <textarea id={`notes-${order.id}`} name="notes" required maxLength={10000} rows={3} />
+                    <button className="secondary">Add maintenance entry</button>
+                  </fieldset>
+                </form>
+                <form onSubmit={event => submitWork(event, order.id, 'complete')}>
+                  <fieldset disabled={busy}>
+                    <legend>Complete work order</legend>
+                    <label htmlFor={`labor-${order.id}`}>Labor cost</label>
+                    <input id={`labor-${order.id}`} name="labor_cost" type="number" min="0" max="9999999999.99" step="0.01" defaultValue={order.labor_cost} required />
+                    <label htmlFor={`materials-${order.id}`}>Materials cost</label>
+                    <input id={`materials-${order.id}`} name="materials_cost" type="number" min="0" max="9999999999.99" step="0.01" defaultValue={order.materials_cost} required />
+                    <button>Complete work</button>
+                  </fieldset>
+                </form>
+              </>}
+            </section>)}
           </section>}
+          {role === 'administrator' && detail.status === 'awaiting_verification' && <section>
+            <h3>Review completed work</h3>
+            <form onSubmit={event => reviewWork(event, 'verify')}>
+              <fieldset disabled={busy}>
+                <label htmlFor="verification-notes">Verification notes (optional)</label>
+                <textarea id="verification-notes" name="notes" maxLength={10000} rows={3} />
+                <button>Verify and close</button>
+              </fieldset>
+            </form>
+            {detail.eligible_technicians?.length ? (
+              <form onSubmit={event => reviewWork(event, 'return')}>
+                <fieldset disabled={busy}>
+                  <label htmlFor="follow-up-technician">Follow-up technician</label>
+                  <select id="follow-up-technician" name="technician_id"
+                    defaultValue={detail.eligible_technicians.some(technician =>
+                      technician.id === detail.work_orders.at(-1)?.technician_id)
+                      ? detail.work_orders.at(-1)?.technician_id : ''} required>
+                    <option value="" disabled>Select technician</option>
+                    {detail.eligible_technicians.map(technician =>
+                      <option key={technician.id} value={technician.id}>{technician.full_name}</option>)}
+                  </select>
+                  <label htmlFor="follow-up-reason">What still needs repair?</label>
+                  <textarea id="follow-up-reason" name="reason" required maxLength={10000} rows={3} />
+                  <button className="secondary">Return for follow-up</button>
+                </fieldset>
+              </form>
+            ) : <p className="muted">Assign branch access to an active technician to return this repair.</p>}
+          </section>}
+          {role === 'branch_manager' && <MaintenanceHistory logs={detail.maintenance_logs} />}
           <h3 className="history-heading">Activity history</h3>
           <ol className="timeline">{detail.events.map(event => {
             let summary = label(event.action);
@@ -214,8 +369,19 @@ export function Requests({ token, role, branches, onExpired }: Props) {
               summary = `Priority changed from ${event.details.from ?? 'unset'} to ${event.details.to}`;
             } else if (event.action === 'work_order_assigned') {
               summary = `Assigned to ${event.details.technician_name}`;
+            } else if (event.action === 'work_completed') {
+              summary = 'Work completed and submitted for verification';
+            } else if (event.action === 'work_returned') {
+              summary = `Returned for follow-up and assigned to ${event.details.technician_name}`;
+            } else if (event.action === 'work_reassigned') {
+              summary = `Reassigned from ${event.details.previous_technician_name} to ${event.details.technician_name}`;
+            } else if (event.action === 'verified_and_closed') {
+              summary = 'Repair verified and request closed';
             }
-            return <li key={event.id}><strong>{summary}</strong><small>{event.actor_name} · {date(event.created_at)}</small></li>;
+            const note = event.details.reason || event.details.notes;
+            return <li key={event.id}><strong>{summary}</strong><small>{event.actor_name} · {date(event.created_at)}</small>
+              {note && <p className="description">{note}</p>}
+            </li>;
           })}</ol>
         </>}
     </aside></div>

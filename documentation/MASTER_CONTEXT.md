@@ -10,35 +10,40 @@ The original November 2026 proposal was prepared for Laguna State Polytechnic Un
 
 | Role | Available on the baseline branch | Intended responsibilities beyond the baseline |
 | --- | --- | --- |
-| Employee | Report equipment or facility issues and track their own requests and activity within their current branch access. | Attach an optional issue photo and follow the report through verified closure. |
-| Administrator | Create branches, manage eligible employee and technician accounts, review requests within granted branches, set priorities, and assign initial work orders. | Verify repair results, return incomplete repairs for more work, close requests, and review branch workload and costs. |
-| Technician | View assigned requests and start their assigned work orders within their current branch access. | Record diagnosis, progress and actions, enter labor and material costs, and report completion. |
+| Branch Manager | Report equipment or facility issues and track their own requests and activity within their current branch access. | Attach an optional issue photo and follow the report through verified closure. |
+| Administrator | Manage branch accounts, triage requests, assign work, verify and close repairs, or return repairs with follow-up instructions. | Review branch workload and costs through dashboards. |
+| Technician | Start and complete initial and follow-up work orders. Record diagnosis, progress, repair actions, and labor and materials costs. | Record asset repair history and attach supporting photos as those workflows are added. |
 
 ## Workflow and scope
 
-**Available today.** An administrator creates an employee account under **People & branches** and grants it one branch. The employee opens **Report an issue** and submits the branch, title, description, and location. A registered asset in the same branch is optional, so general facility concerns can be submitted independently. The request starts as `submitted` with priority unset. In **Service requests**, the administrator reviews it and chooses `low`, `medium`, `high`, or `urgent`. The employee can see that change in the activity history. Triage leaves the request status at `submitted`.
+**Available today.** An administrator creates a Branch Manager account under **People & branches** and grants it one or more branches. The branch manager opens **Report an issue** and submits the branch, title, description, and location. A registered asset in the same branch is optional, so general facility concerns can be submitted independently. The request starts as `submitted` with priority unset. In **Service requests**, the administrator reviews it and chooses `low`, `medium`, `high`, or `urgent`. The branch manager can see that change in the activity history. Triage leaves the request status at `submitted`.
 
-**Target repair lifecycle.** The administrator creates a work order and assigns a technician with access to the request's branch. The technician diagnoses the issue, records progress and repair actions, enters labor and material costs, and marks the work complete. The administrator verifies the result and closes the request, or returns it to active repair with an explanatory event. A request can have multiple work orders for follow-up repairs. Each work order has one technician. Request and maintenance histories preserve the actor and timestamp for traceability.
+**Repair lifecycle.** The administrator reviews the latest completed work order and can verify and close the request with optional notes. Returning the repair requires instructions and an active technician in the request's branch. The request moves back to `in_progress` and a new assigned work order is created in the same transaction. Completed orders retain their logs and costs. Branch managers can follow the decision in the request history.
 
 - Request states modeled in the schema: `submitted → in_progress → awaiting_verification → closed`.
 - Work-order states modeled in the schema: `assigned → in_progress → completed`.
-- The active API handles submission, priority changes, initial assignment, and starting work. Administrators assign a submitted request with no existing work order to an active technician with access to its branch. The work order starts as `assigned` and the request stays `submitted`. In **Assigned requests**, the assigned technician can see the work-order status and choose **Start work**. This changes both records to `in_progress` and adds an activity event in the same transaction.
+- The active API handles submission, priority changes, initial assignment, starting work, maintenance entries, and technician completion. Administrators assign a submitted request with no existing work order to an active technician with access to its branch. The work order starts as `assigned` and the request stays `submitted`. In **Assigned requests**, the assigned technician can see the work-order status and choose **Start work**. This changes both records to `in_progress` and adds an activity event in the same transaction. While work is in progress, the technician can append diagnosis, progress, and repair entries. Completing work saves labor and materials costs, marks the order completed, moves the request to awaiting verification, and adds one completion event in the same transaction. Administrators can review logs and costs. Branch managers can read technician maintenance entries on their own accessible requests, including prior work orders, and follow completion in the activity history.
+
+Administrators can reassign an assigned or in-progress work order to another active technician with branch access. Reassignment requires a reason and records the previous and new technician in the request history. The new technician inherits the order's status and maintenance history.
+
+The in-app inbox uses request events and stores read state per account. Administrators receive new
+reports and completion alerts, technicians receive assignments and follow-ups, and branch managers
+receive updates on their own reports. Inbox queries enforce current request access. Visible tabs
+refresh the inbox, request queue, and open request every five seconds.
 
 **Delivery order from the development plan**
 
-1. Append-only maintenance logs, labor and materials cost entry, and technician completion.
-2. Verification, follow-up work orders, and administrator closure.
-3. Asset registry management and protected photo uploads.
-4. Branch dashboards, asset repair history, and cost summaries. Intended dashboard views cover open requests, ongoing repairs, completed work, and recorded costs.
+1. Asset registry management and protected photo uploads.
+2. Branch dashboards, asset repair history, and cost summaries. Intended dashboard views cover open requests, ongoing repairs, completed work, and recorded costs.
 
 **Future expansion.** Preventive maintenance scheduling, asset QR codes, email or SMS notifications, service targets and escalation, spare-parts inventory, purchase requests, external service providers, offline mobile capture and synchronization, and longer-term recurring-failure and replacement analysis.
 
 ## Authorization and activity rules
 
 - The server enforces role and current branch grants. `branch_access` is explicit for all roles, including administrators. Revocation applies to subsequent protected calls even with an unexpired token.
-- Employees can submit only to granted branches and see only their own requests in branches they can still access. Administrators see requests in their granted branches. Technicians need both current branch access and a linked work order assigned to them.
-- Administrator account controls apply only to employees and technicians whose entire branch grant set is within the acting administrator's scope. Employees require exactly one branch. Technicians can have one or more. Administrators can grant only branches they already hold. Creating a branch grants the creator access. The current UI supports branch creation. Branch rename and deletion are outside the current interface.
-- The first administrator can be provisioned through the browser with an optional setup token. Browser provisioning closes once an administrator exists. The bootstrap CLI can also provision administrators. The management API creates, reassigns and enables or disables employee and technician accounts. A disabled account cannot sign in or reuse an issued token. Accounts use Argon2 password hashing and expiring JWT bearer tokens with a 30-minute default. The React client keeps tokens in memory. Refresh requires sign-in, and client sign-out clears local session state while an issued token remains valid until expiry, subject to account and permission checks.
+- Branch managers can submit only to granted branches and see only their own requests in branches they can still access. Administrators see requests in their granted branches. Technicians need both current branch access and a linked work order assigned to them.
+- Administrator account controls apply only to branch managers and technicians whose entire branch grant set is within the acting administrator's scope. Both roles require one or more branches. The role migration converts existing employees and retains their grants and history. Administrators can grant only branches they already hold. Creating a branch grants the creator access. The current UI supports branch creation. Branch rename and deletion are outside the current interface.
+- The first administrator can be provisioned through the browser with an optional setup token. Browser provisioning closes once an administrator exists. The bootstrap CLI can also provision administrators. The management API creates, reassigns and enables or disables branch manager and technician accounts. A disabled account cannot sign in or reuse an issued token. Accounts use Argon2 password hashing and expiring JWT bearer tokens with a 30-minute default. The React client keeps tokens in memory. Refresh requires sign-in, and client sign-out clears local session state while an issued token remains valid until expiry, subject to account and permission checks.
 - Missing and out-of-scope request IDs return the same 404. A closed request returns 409 on reprioritization. Priority updates lock the request row and record an event only when the value changes. Submission and priority events commit in the same transaction as their corresponding changes. Keep future request events and maintenance logs append-only in application operations.
 - Attachment files are intended to stay private. Enforce parent-request access on future downloads. The schema has attachment metadata, and the existing asset selector reads existing branch registry records. The baseline has no attachment transfer or asset registry management API.
 
@@ -65,7 +70,10 @@ The proposal's production topology is browser → HTTPS web gateway → FastAPI 
 | --- | --- |
 | Health and identity | `GET /api/health`, `GET /api/ready`, `POST /api/auth/login`, `GET /api/auth/me`, `GET /api/branches` |
 | Initial setup | `POST /api/setup/admin` with `X-Setup-Token` when browser setup is enabled |
+| Notifications | `GET /api/notifications`, `PUT /api/notifications/{event_id}/read` |
 | Administrator | `POST /api/admin/branches`, `GET /api/admin/users`, `POST /api/admin/users`, `PUT /api/admin/users/{user_id}/branches`, `PATCH /api/admin/users/{user_id}/active` |
+| Technician progress | `POST /api/requests/{request_id}/work-orders/{work_order_id}/logs`, `POST /api/requests/{request_id}/work-orders/{work_order_id}/complete` |
+| Administrator repair review | `POST /api/requests/{request_id}/verify`, `POST /api/requests/{request_id}/return` |
 | Service requests | `POST /api/requests`, `GET /api/requests`, `GET /api/requests/assets?branch_id=…`, `GET /api/requests/{request_id}`, `PATCH /api/requests/{request_id}/priority`, `POST /api/requests/{request_id}/work-orders`, `POST /api/requests/{request_id}/work-orders/{work_order_id}/start` |
 
 The request list searches titles case-insensitively and supports branch, status and priority filters. It sorts newest first and uses offset pagination with a default limit of 25 and a maximum of 100. Detail responses include activity in chronological order. Submission trims and validates title, description and location. See route schemas or Swagger for payload details.

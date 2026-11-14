@@ -6,9 +6,10 @@ recording actions and costs, and verifying resolution.
 Start with the [FixTrack Master Context](documentation/MASTER_CONTEXT.md) for product scope,
 role and branch rules, implementation status, and the roadmap.
 
-**Status:** authentication, administrator account/branch controls, employee service requests,
+**Status:** authentication, administrator account/branch controls, branch manager service requests,
 branch-scoped request review, priority changes, initial work-order assignment, starting repairs,
-and activity history are implemented. Repair logs and costs, closure, and photo uploads are upcoming.
+maintenance logs, costs, technician completion, and administrator verification and closure
+are implemented. Asset registry management and photo uploads are upcoming.
 
 ## Repository layout
 
@@ -77,20 +78,37 @@ On macOS/Linux, use `.venv/bin/python` in place of `.venv\Scripts\python`.
 ## Try the request workflow
 
 1. Sign in as an administrator and open **People & branches**.
-2. Create an employee account with access to one of your branches.
-3. Sign out and sign in as that employee. Select **Report an issue**, fill in its title,
+2. Create a Branch Manager account with access to one or more of your branches.
+3. Sign out and sign in as that branch manager. Select **Report an issue**, fill in its title,
    description, and location, then submit it. A registered asset is optional.
 4. Sign in as the administrator again. Open the request under **Service requests** and set
-   its priority. The employee can see the update in the request's activity history.
+   its priority. The branch manager can see the update in the request's activity history.
 5. On the request detail page, select an active technician with access to the branch and choose
    **Assign technician**. Sign in as that technician and open **Assigned requests** to see it.
 6. Open the assigned request and choose **Start work**. Both the work order and the request
    move to **In progress**, and the request history records who started the work.
+7. Add maintenance entries for diagnosis, progress, and repairs. Enter labor and materials costs
+   and choose **Complete work**. The request moves to **Awaiting verification**. Administrators
+   can review the logs and costs in the request details.
+8. As an administrator, open the request and choose **Verify and close**, or enter a reason,
+   select a technician, and choose **Return for follow-up**. The technician can start and
+   complete the new work order, then the administrator can review it again.
 
-Employees see their own requests within their current branch access. Administrators see all
+Branch managers see their own requests within their current branch access. Administrators see all
 requests in their branches. Technicians see requests linked to their assigned work orders;
 their branch access still applies. A submitted request can receive one initial work order.
 It stays `submitted` after assignment and the work order starts as `assigned`.
+
+To hand off active work, open the work order as an administrator, select a replacement
+technician, enter a reason, and choose **Reassign technician**.
+
+Open **Notifications** in the header to see new activity for your role. Opening an alert
+marks it read and takes you to the request. The inbox, queue, and open request refresh
+every five seconds while the tab is visible.
+
+For an existing database, run `alembic upgrade head` before starting the updated API.
+The migration converts employee accounts to branch managers and preserves their branch grants,
+credentials, and request history.
 
 ## Checks and migrations
 

@@ -82,19 +82,19 @@ export function Admin({ token, branches, refreshBranches, onExpired }: Props) {
           <input id="new-password" name="password" type="password" autoComplete="new-password" minLength={12} maxLength={128} required aria-describedby="password-hint" />
           <p className="field-hint" id="password-hint">Use at least 12 characters.</p>
           <label htmlFor="new-role">Role</label><select id="new-role" name="role">
-            <option value="employee">Employee</option><option value="technician">Technician</option></select>
+            <option value="branch_manager">Branch Manager</option><option value="technician">Technician</option></select>
           <BranchChecks branches={branches} />
-          <p className="note">Select one branch for an employee. Technicians may work across several.</p>
+          <p className="note">Select at least one branch.</p>
           <button>Create account</button>
         </fieldset></form>
         {!branches.length && <p>Create a branch first.</p>}
       </section>
     </div>
     <section className="card user-list"><h2>Managed accounts</h2>
-      <p className="muted">Employees and technicians whose branches are all within your access.</p>
+      <p className="muted">Branch managers and technicians whose branches are all within your access.</p>
       {loading ? <p role="status">Loading accounts…</p> : !users.length ? <p>No managed accounts yet.</p>
         : users.map(user => <article key={user.id} className="user-row">
-          <div className="user-summary"><div><strong>{user.full_name}</strong><small>{user.email} · <span className="role">{user.role}</span></small></div><span className={`badge ${user.is_active ? 'priority-low' : 'priority-null'}`}>{user.is_active ? 'Active' : 'Disabled'}</span></div>
+          <div className="user-summary"><div><strong>{user.full_name}</strong><small>{user.email} · <span className="role">{user.role === 'branch_manager' ? 'Branch manager' : 'Technician'}</span></small></div><span className={`badge ${user.is_active ? 'priority-low' : 'priority-null'}`}>{user.is_active ? 'Active' : 'Disabled'}</span></div>
           <form onSubmit={event => {
             event.preventDefault(); const data = new FormData(event.currentTarget);
             void mutate(async () => {

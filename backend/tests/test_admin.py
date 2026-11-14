@@ -16,13 +16,13 @@ def payload(branch_id, **overrides):
         "email": "worker@example.com",
         "full_name": "Worker",
         "password": "safe-password-123",
-        "role": "employee",
+        "role": "branch_manager",
         "branch_ids": [str(branch_id)],
         **overrides,
     }
 
 
-@pytest.mark.parametrize("role", [Role.employee, Role.technician])
+@pytest.mark.parametrize("role", [Role.branch_manager, Role.technician])
 def test_non_admin_cannot_use_admin_routes(client, account, db, role):
     account.role = role
     db.commit()
@@ -138,7 +138,7 @@ def test_scope_and_administrator_protection(client, account, db):
     )
 
 
-def test_change_access_and_employee_cardinality(client, account, db):
+def test_branch_manager_can_be_granted_multiple_branches(client, account, db):
     auth = headers(account)
     first = db.scalar(select(BranchAccess.branch_id).where(BranchAccess.user_id == account.id))
     second = client.post(
@@ -148,9 +148,9 @@ def test_change_access_and_employee_cardinality(client, account, db):
     user_id = response.json()["id"]
     path = f"/api/admin/users/{user_id}/branches"
     assert client.put(path, headers=auth, json={"branch_ids": []}).status_code == 422
-    assert (
-        client.put(path, headers=auth, json={"branch_ids": [str(first), second]}).status_code == 422
-    )
+    changed = client.put(path, headers=auth, json={"branch_ids": [str(first), second]})
+    assert changed.status_code == 200
+    assert set(changed.json()["branch_ids"]) == {str(first), second}
     assert (
         client.put(path, headers=auth, json={"branch_ids": [str(uuid.uuid4())]}).status_code == 403
     )

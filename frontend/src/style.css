@@ -329,8 +329,21 @@ form { margin-top: 20px; }
 .timeline li { position: relative; font-size: .875rem; padding-bottom: 16px; }
 .timeline li:last-child { padding-bottom: 0; }
 .timeline li::before { content: ''; position: absolute; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); left: -21px; top: 6px; }
+.timeline li:first-child::before { box-sizing: border-box; width: 14px; height: 14px; left: -24px; top: 3px; border: 3px solid var(--accent); background: white; }
+.timeline li:last-child:not(:only-child)::before { width: 12px; height: 12px; left: -23px; top: 4px; border-radius: 2px; transform: rotate(45deg); background: var(--ink); box-shadow: 0 0 0 2px white; }
 .timeline strong { display: inline-block; }
 .timeline strong::first-letter { text-transform: uppercase; }
+.work-order { margin-block: 12px; }
+.work-order > .badge { margin-inline-end: 10px; }
+.work-order form legend { font-weight: 600; margin-bottom: 8px; }
+.notification-menu { position: relative; }
+.notification-inbox { position: absolute; z-index: 5; inset-inline-end: 0; top: calc(100% + 8px); width: min(320px, 80vw); max-height: 60vh; overflow: auto; padding: 12px; }
+.notification-inbox ul { list-style: none; padding: 0; margin: 0; }
+.notification-inbox li + li { margin-top: 6px; }
+.notification-inbox button { display: grid; justify-items: start; width: 100%; text-align: start; overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .notification-inbox { position: fixed; inset: 72px 12px auto; width: auto; }
+}
 .empty-state { padding: 28px 20px; text-align: center; color: var(--muted); }
 .empty-state :is(h2,h3) { color: var(--ink); margin: 12px 0 6px; }
 .back-to-queue { margin-bottom: 16px; }

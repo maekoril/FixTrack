@@ -5,6 +5,7 @@ import { Admin } from './Admin';
 import { Requests } from './Requests';
 import { Icon } from './Icon';
 import { Setup } from './Setup';
+import { Notifications } from './Notifications';
 
 type User = { id: string; full_name: string; email: string; role: string };
 type Branch = { id: string; name: string; location: string };
@@ -17,10 +18,12 @@ function App() {
   const [token, setToken] = useState<string | null>(null);
   const [section, setSection] = useState(window.location.hash);
   const [adminCreated, setAdminCreated] = useState(false);
+  const [notificationRequest, setNotificationRequest] = useState({ id: '' });
   const tab = section === '#people' && user?.role === 'administrator' ? 'admin' : 'requests';
 
   function signOut() {
     setToken(null); setUser(null); setBranches([]); setSection('');
+    setNotificationRequest({ id: '' });
     window.history.replaceState(null, '', window.location.pathname + window.location.search);
   }
   async function refreshBranches() {
@@ -62,7 +65,7 @@ function App() {
     return () => window.removeEventListener('hashchange', syncSection);
   }, []);
 
-  const requestLabel = user?.role === 'employee' ? 'My requests'
+  const requestLabel = user?.role === 'branch_manager' ? 'My requests'
     : user?.role === 'technician' ? 'Assigned requests' : 'Service requests';
   const initials = user?.full_name.trim().split(/\s+/).slice(0, 2).map(part => part[0]).join('');
 
@@ -83,11 +86,14 @@ function App() {
     <div className="app-body">
       <header className="app-header">
         <div className="breadcrumb"><span>Workspace</span><span aria-hidden="true">/</span><strong>{tab === 'admin' ? 'People & branches' : requestLabel}</strong></div>
-        <div className="session"><span className="avatar" aria-hidden="true">{initials}</span><div className="session-user"><strong>{user.full_name}</strong><small>{user.role}</small></div>
+        <div className="session"><Notifications token={token} onExpired={signOut} onOpen={id => {
+          setNotificationRequest({ id });
+          window.location.hash = '#requests';
+        }} /><span className="avatar" aria-hidden="true">{initials}</span><div className="session-user"><strong>{user.full_name}</strong><small>{user.role.replaceAll('_', ' ')}</small></div>
           <button className="secondary sign-out" onClick={signOut}><Icon name="logout" size={17} />Sign out</button></div>
       </header>
       <main className="workspace" id="workspace" tabIndex={-1}>
-        {tab === 'requests' ? <Requests token={token} role={user.role} branches={branches} onExpired={signOut} />
+        {tab === 'requests' ? <Requests token={token} role={user.role} branches={branches} onExpired={signOut} openedRequest={notificationRequest} />
           : <Admin token={token} branches={branches} refreshBranches={refreshBranches} onExpired={signOut} />}
       </main>
     </div>

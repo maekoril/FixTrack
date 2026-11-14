@@ -40,7 +40,7 @@ class UserInput(BaseModel):
     full_name: Name
     email: EmailStr
     password: str = Field(min_length=12, max_length=128)
-    role: Literal["employee", "technician"]
+    role: Literal["branch_manager", "technician"]
     branch_ids: list[uuid.UUID] = Field(min_length=1)
 
 
@@ -72,11 +72,9 @@ def output(db: Session, user: User) -> UserOutput:
     )
 
 
-def validate_access(ids: list[uuid.UUID], scope: set[uuid.UUID], role: Role | str):
+def validate_access(ids: list[uuid.UUID], scope: set[uuid.UUID]):
     if not set(ids) <= scope:
         raise HTTPException(403, "You can only grant access to your own branches")
-    if role == Role.employee and len(set(ids)) != 1:
-        raise HTTPException(422, "Employees must belong to exactly one branch")
 
 
 def managed_user(db: Session, actor: User, user_id: uuid.UUID) -> User:
@@ -131,7 +129,7 @@ def users(actor: User = Depends(administrator), db: Session = Depends(get_db)):
 def create_user(
     data: UserInput, actor: User = Depends(administrator), db: Session = Depends(get_db)
 ):
-    validate_access(data.branch_ids, branch_ids(db, actor.id), data.role)
+    validate_access(data.branch_ids, branch_ids(db, actor.id))
     user = User(
         full_name=data.full_name,
         email=str(data.email).lower(),
@@ -162,7 +160,7 @@ def update_access(
     db: Session = Depends(get_db),
 ):
     user = managed_user(db, actor, user_id)
-    validate_access(data.branch_ids, branch_ids(db, actor.id), user.role)
+    validate_access(data.branch_ids, branch_ids(db, actor.id))
     existing = db.scalars(select(BranchAccess).where(BranchAccess.user_id == user.id)).all()
     wanted = set(data.branch_ids)
     current = {grant.branch_id for grant in existing}
