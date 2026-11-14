@@ -40,6 +40,7 @@
 | `POST /api/requests/{id}/work-orders/{work_order_id}/start` | Start an assigned work order as its technician |
 | `POST /api/requests/{id}/work-orders/{work_order_id}/logs` | Append an action and notes to an in-progress work order |
 | `POST /api/requests/{id}/work-orders/{work_order_id}/complete` | Save costs and submit the work for verification |
+| `GET /api/reports/repairs` | Report branch totals for verified closures, completed work orders, labor, materials, and combined costs |
 
 Administrator tools manage only branch managers and technicians whose complete branch access is
 within the administrator's scope. Both roles may have multiple branches.
@@ -65,7 +66,14 @@ Asset history and cost totals follow current administrator branch grants.
 
 ## Next milestones
 
-1. Expanded asset reporting and cost summaries.
+1. Technician access to asset repair history.
+
+Repair reports accept inclusive UTC calendar dates as `start_date` and `end_date`, plus an
+optional `branch_id`. They count verified closures by `closed_at` and completed work orders
+by their existing `work_completed` events. An order contributes its costs once, including
+when it is a follow-up or its parent request remains open. Only current administrator branch
+grants are included. Completed orders without a recorded completion event have no date for
+reporting and are omitted from the date-range figures.
 
 Requests move from `submitted` to `in_progress` to `awaiting_verification` to `closed`.
 An administrator can send a request back to `in_progress` with instructions and a new work order.

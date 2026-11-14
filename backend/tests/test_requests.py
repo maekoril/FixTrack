@@ -1,4 +1,5 @@
 import uuid
+from datetime import timedelta
 from io import BytesIO
 
 import pytest
@@ -485,6 +486,62 @@ def test_technician_logs_and_completes_work(client, account, db, people):
     manager_events = client.get(path, headers=auth(manager)).json()["events"]
     assert any(event["details"].get("reason") == "Retest under load" for event in manager_events)
     assert any(event["details"].get("notes") == "Passed under load" for event in manager_events)
+
+    report_url = "/api/reports/repairs"
+    day = saved.closed_at.date()
+    dates = {"start_date": day.isoformat(), "end_date": day.isoformat()}
+    # The original order and follow-up can finish on different reporting days.
+    first_completion = db.scalar(
+        select(RequestEvent).where(
+            RequestEvent.request_id == saved.id,
+            RequestEvent.action == "work_completed",
+            RequestEvent.details["work_order_id"].as_string() == order["id"],
+        )
+    )
+    first_completion.created_at = saved.closed_at - timedelta(days=1)
+    follow_up_completion = db.scalar(
+        select(RequestEvent).where(
+            RequestEvent.request_id == saved.id,
+            RequestEvent.action == "work_completed",
+            RequestEvent.details["work_order_id"].as_string() == follow_up["id"],
+        )
+    )
+    follow_up_completion.created_at = saved.closed_at
+    db.commit()
+    summary = client.get(report_url, headers=admin, params=dates).json()
+    assert summary["totals"] == {
+        "closed_requests": 1,
+        "completed_orders": 1,
+        "labor_cost": "120.25",
+        "materials_cost": "0.00",
+        "total_cost": "120.25",
+    }
+    assert [row["branch_id"] for row in summary["branches"]] == [str(branch.id)]
+    wider = client.get(
+        report_url,
+        headers=admin,
+        params=dates
+        | {"branch_id": branch.id, "start_date": (day - timedelta(days=1)).isoformat()},
+    )
+    assert wider.json()["totals"] == summary["totals"] | {
+        "completed_orders": 2,
+        "labor_cost": "240.50",
+        "total_cost": "240.50",
+    }
+    assert client.get(report_url, headers=tech, params=dates).status_code == 403
+    assert (
+        client.get(
+            report_url, headers=admin, params=dates | {"start_date": "9999-12-31"}
+        ).status_code
+        == 422
+    )
+    db.delete(db.get(BranchAccess, (account.id, branch.id)))
+    db.commit()
+    assert client.get(report_url, headers=admin, params=dates).json()["branches"] == []
+    assert (
+        client.get(report_url, headers=admin, params=dates | {"branch_id": branch.id}).status_code
+        == 404
+    )
 
 
 @pytest.mark.parametrize("started", [False, True])

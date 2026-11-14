@@ -1,4 +1,5 @@
 const paths = {
+  report: 'M4 3v17h17M9 16v-4m5 4V8m5 8V5',
   asset: 'M12 3 3 8v9l9 5 9-5V8l-9-5Zm0 10v9M3 8l9 5 9-5M8 5l9 5',
   dashboard: 'M3 3h7v7H3zM14 3h7v11h-7zM3 14h7v7H3zM14 18h7v3h-7z',
   bell: 'M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4',

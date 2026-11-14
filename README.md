@@ -81,6 +81,9 @@ On macOS/Linux, use `.venv/bin/python` in place of `.venv\Scripts\python`.
 Administrators can open **Dashboard** to see branch-scoped workload counts. Select a count to
 open its matching queue. The branch filter carries over to the queue.
 
+Open **Reports** to compare verified closures, completed work orders, and labor and materials
+costs by branch. The selected UTC dates include both the start and end day.
+
 1. Sign in as an administrator and open **People & branches**.
 2. Create a Branch Manager account with access to one or more of your branches.
 3. Sign out and sign in as that branch manager. Select **Report an issue**, fill in its title,

@@ -9,6 +9,7 @@ import { Setup } from './Setup';
 import { Notifications } from './Notifications';
 import { Dashboard, queues, type QueueFocus } from './Dashboard';
 import { Assets } from './Assets';
+import { Reports } from './Reports';
 
 type User = { id: string; full_name: string; email: string; role: string };
 type Branch = { id: string; name: string; location: string };
@@ -25,6 +26,7 @@ function App() {
   const [route, query] = section.split('?');
   const tab = user?.role === 'administrator' && route === '#people' ? 'admin'
     : user?.role === 'administrator' && route === '#assets' ? 'assets'
+    : user?.role === 'administrator' && route === '#reports' ? 'reports'
     : user?.role === 'administrator' && (!route || route === '#dashboard') ? 'dashboard' : 'requests';
   const queueParams = new URLSearchParams(query);
   const queueFocus = queueParams.get('focus') ?? '';
@@ -93,6 +95,7 @@ function App() {
         <p className="eyebrow nav-label">Workspace</p>
         {user.role === 'administrator' && <a href="#dashboard" aria-current={tab === 'dashboard' ? 'page' : undefined}><Icon name="dashboard" />Overview</a>}
         {user.role === 'administrator' && <a href="#assets" aria-current={tab === 'assets' ? 'page' : undefined}><Icon name="asset" />Assets</a>}
+        {user.role === 'administrator' && <a href="#reports" aria-current={tab === 'reports' ? 'page' : undefined}><Icon name="report" />Reports</a>}
         <a href="#requests" aria-current={tab === 'requests' ? 'page' : undefined}><Icon name="requests" />{requestLabel}</a>
         {user.role === 'administrator' && <a href="#people" aria-current={tab === 'admin' ? 'page' : undefined}><Icon name="people" />People &amp; branches</a>}
       </nav>
@@ -100,7 +103,7 @@ function App() {
     </aside>
     <div className="app-body">
       <header className="app-header">
-        <div className="breadcrumb"><span>Workspace</span><span aria-hidden="true">/</span><strong>{tab === 'admin' ? 'People & branches' : tab === 'dashboard' ? 'Overview' : tab === 'assets' ? 'Assets' : requestLabel}</strong></div>
+        <div className="breadcrumb"><span>Workspace</span><span aria-hidden="true">/</span><strong>{tab === 'admin' ? 'People & branches' : tab === 'dashboard' ? 'Overview' : tab === 'assets' ? 'Assets' : tab === 'reports' ? 'Reports' : requestLabel}</strong></div>
         <div className="session"><Notifications token={token} onExpired={signOut} onOpen={id => {
           setNotificationRequest({ id });
           window.location.hash = '#requests';
@@ -117,6 +120,7 @@ function App() {
             : tab === 'assets' ? <Assets token={token} branches={branches} onExpired={signOut} onRequest={id => {
               setNotificationRequest({ id }); window.location.hash = '#requests';
             }} />
+            : tab === 'reports' ? <Reports token={token} branches={branches} onExpired={signOut} />
             : <Admin token={token} branches={branches} refreshBranches={refreshBranches} onExpired={signOut} />}
       </main>
     </div>

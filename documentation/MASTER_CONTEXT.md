@@ -11,7 +11,7 @@ The original November 2026 proposal was prepared for Laguna State Polytechnic Un
 | Role | Available on the baseline branch | Intended responsibilities beyond the baseline |
 | --- | --- | --- |
 | Branch Manager | Report equipment or facility issues, attach optional photos, and track their own requests through verified closure. | |
-| Administrator | Manage branch accounts, triage requests, assign work, verify and close repairs, or return repairs with follow-up instructions. View branch workload from the Dashboard. | Review cost trends and asset repair history. |
+| Administrator | Manage branch accounts, triage requests, assign work, verify and close repairs, or return repairs with follow-up instructions. View branch workload, repair and cost reports, and asset repair history. | |
 | Technician | Start and complete initial and follow-up work orders. Record diagnosis, progress, repair actions, labor and materials costs, and repair photos. | Review asset repair history. |
 
 ## Workflow and scope
@@ -38,9 +38,12 @@ the urgent list opens individual requests. Counts and up to four urgent requests
 five seconds while the tab is visible. Administrators can pause and resume overview updates;
 the displayed update time shows the last successful refresh.
 
-**Delivery order from the development plan**
+Administrators can open **Reports** to compare verified closures, completed work orders, and
+labor, materials, and total repair costs across their accessible branches. The report uses an
+inclusive UTC date range. Closures use the verification date. Work orders, including follow-ups,
+use their recorded completion date.
 
-1. Expanded cost summaries and asset reporting.
+**Next development milestone.** Technician access to asset repair history.
 
 Administrators can register and edit branch equipment in Assets, search by tag or name, and
 view linked request and work-order history with total recorded repair costs. Existing assets
@@ -89,6 +92,7 @@ The proposal's production topology is browser → HTTPS web gateway → FastAPI 
 | Notifications | `GET /api/notifications`, `PUT /api/notifications/{event_id}/read` |
 | Photos | `POST /api/requests/{request_id}/photos`, `GET /api/requests/{request_id}/photos/{photo_id}` with optional `thumbnail=true` |
 | Administrator dashboard | `GET /api/requests/dashboard` with optional `branch_id`. Queue links use `focus` on `GET /api/requests`. |
+| Administrator reports | `GET /api/reports/repairs` with required `start_date` and `end_date` and optional `branch_id`. |
 | Administrator | `POST /api/admin/branches`, `GET /api/admin/users`, `POST /api/admin/users`, `PUT /api/admin/users/{user_id}/branches`, `PATCH /api/admin/users/{user_id}/active` |
 | Technician progress | `POST /api/requests/{request_id}/work-orders/{work_order_id}/logs`, `POST /api/requests/{request_id}/work-orders/{work_order_id}/complete` |
 | Administrator repair review | `POST /api/requests/{request_id}/verify`, `POST /api/requests/{request_id}/return` |
