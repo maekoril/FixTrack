@@ -14,9 +14,8 @@
   stay private, and download handlers must enforce the parent request's access rules.
 - Passwords use Argon2; short-lived signed bearer tokens identify the current user. Account
   activation and current permissions are read from the database on protected requests.
-- The initial frontend uses the token only during sign-in to load profile and branches and then
-  discards it. Refresh requires signing in again. Future authenticated tools should use an
-  in-memory session provider. Do not persist bearer tokens in localStorage.
+- The frontend keeps its bearer token in React state for administrator operations. Refresh
+  requires signing in again. Tokens are never persisted in localStorage or sessionStorage.
 - No public registration, default accounts, or automatic schema creation at server startup.
 
 ## Implemented endpoints
@@ -28,15 +27,39 @@
 | `POST /api/auth/login` | JSON email/password to expiring bearer token |
 | `GET /api/auth/me` | Authenticated profile |
 | `GET /api/branches` | Branches explicitly granted to the current user |
+| `POST /api/admin/branches` | Create a branch and grant the creating administrator access |
+| `GET/POST /api/admin/users` | List managed users or create employee/technician accounts |
+| `PUT /api/admin/users/{id}/branches` | Replace a managed user's branch access |
+| `PATCH /api/admin/users/{id}/active` | Disable or enable a managed account |
+| `POST /api/requests` | Employee submission with optional registered asset |
+| `GET /api/requests` | Scoped list with search, branch/status/priority filters and pagination |
+| `GET /api/requests/assets?branch_id=...` | Registered assets for an accessible branch |
+| `GET /api/requests/{id}` | Scoped request details and activity history |
+| `PATCH /api/requests/{id}/priority` | Administrator triage with transactional history |
+
+Administrator tools manage only employees and technicians whose complete branch access is
+within the administrator's scope. Employees require exactly one branch; technicians may have
+several. Administrators cannot grant branches they do not have. Administrator accounts are
+provisioned through the bootstrap CLI, so these endpoints cannot create or disable administrators.
+Creating a new branch grants the creator access. The current interface lets administrators
+create branches but does not rename or remove existing branches.
+
+Employees see only their own requests and only while they retain branch access. Administrators
+see requests in their granted branches; technicians see only requests linked to work orders
+assigned to them, also subject to branch access. Missing and inaccessible request IDs return
+the same 404 response. Priority changes do not advance request status; assignment is a later
+milestone. Every submission and actual priority change writes an event in the same transaction.
+Request lists default to 25 records with a maximum of 100 and support an offset.
+The asset selector reads existing registry records; asset registry management and private
+photo uploads are not implemented yet.
 
 ## Next milestones
 
-1. Administrator user/branch management: create users, grant branch access, disable accounts.
-2. Employee request submission/list/detail; optional assets and protected photo uploads.
-3. Administrator priority and work-order assignment; verify technician role and branch access.
-4. Technician progress, immutable maintenance history, and cost entry.
-5. Completion verification, follow-up work orders, and administrator closure.
-6. Branch dashboards, asset repair history, and cost summaries.
+1. Work-order assignment; verify technician role and branch access.
+2. Technician progress, immutable maintenance history, and cost entry.
+3. Completion verification, follow-up work orders, and administrator closure.
+4. Asset registry management and protected photo uploads.
+5. Branch dashboards, asset repair history, and cost summaries.
 
 Proposed request states: `submitted -> in_progress -> awaiting_verification -> closed`.
 An administrator may return a repair to `in_progress` with an explanatory event.

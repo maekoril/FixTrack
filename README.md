@@ -3,8 +3,9 @@
 A multi-branch maintenance and service request system for reporting issues, assigning repairs,
 recording actions and costs, and verifying resolution.
 
-**Status:** development foundation. Authentication, branch visibility, and the initial schema
-are implemented. Request/repair screens and workflow APIs are upcoming.
+**Status:** authentication, administrator account/branch controls, employee service requests,
+branch-scoped request review, priority changes, and activity history are implemented.
+Work-order assignment, repair progress/costs, closure, and photo uploads are upcoming.
 
 ## Repository layout
 
@@ -65,6 +66,20 @@ Visit [FixTrack](http://localhost:5173) and sign in with the account you created
 The Vite development server proxies `/api` to FastAPI. API documentation is at
 [Swagger UI](http://127.0.0.1:8000/docs). Run backend commands from `backend/` so `.env` is found.
 On macOS/Linux, use `.venv/bin/python` in place of `.venv\Scripts\python`.
+
+## Try the request workflow
+
+1. Sign in as an administrator and open **People & branches**.
+2. Create an employee account with access to one of your branches.
+3. Sign out and sign in as that employee. Select **Report an issue**, fill in its title,
+   description, and location, then submit it. A registered asset is optional.
+4. Sign in as the administrator again. Open the request under **Service requests** and set
+   its priority. The employee can see the update in the request's activity history.
+
+Employees see their own requests within their current branch access. Administrators see all
+requests in their branches. Technicians see requests linked to their assigned work orders;
+assignment tools will arrive in the next milestone. Requests remain `submitted` after triage
+until a work order starts the repair workflow. Photos are not supported in this milestone.
 
 ## Checks and migrations
 

@@ -6,18 +6,22 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from app.admin import router as admin_router
 from app.config import get_settings
 from app.db import get_db
 from app.models import Branch, BranchAccess, Role, User
+from app.requests import router as requests_router
 from app.security import current_user, dummy_hash, issue_token, password_hash
 
 app = FastAPI(title="FixTrack API", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_settings().cors_origins,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "PUT", "PATCH"],
     allow_headers=["Authorization", "Content-Type"],
 )
+app.include_router(admin_router)
+app.include_router(requests_router)
 
 
 class LoginInput(BaseModel):
