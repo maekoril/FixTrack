@@ -1,4 +1,7 @@
 const paths = {
+  asset: 'M12 3 3 8v9l9 5 9-5V8l-9-5Zm0 10v9M3 8l9 5 9-5M8 5l9 5',
+  dashboard: 'M3 3h7v7H3zM14 3h7v11h-7zM3 14h7v7H3zM14 18h7v3h-7z',
+  bell: 'M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4',
   mark: 'M3 12 8 4h10l3 5-5 8H6l-3-5Zm5 0h8m-4-4v8m-5 4h10',
   requests: 'M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-2M8 2h8v5H8zm0 10h8m-8 5h6',
   people: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2m20 0v-2a4 4 0 0 0-3-4m-3-12a4 4 0 0 1 0 8M13 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z',

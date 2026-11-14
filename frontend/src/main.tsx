@@ -1,11 +1,14 @@
 import { StrictMode, useEffect, useState, type FormEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 import './style.css';
+import './workspace.css';
 import { Admin } from './Admin';
 import { Requests } from './Requests';
 import { Icon } from './Icon';
 import { Setup } from './Setup';
 import { Notifications } from './Notifications';
+import { Dashboard, queues, type QueueFocus } from './Dashboard';
+import { Assets } from './Assets';
 
 type User = { id: string; full_name: string; email: string; role: string };
 type Branch = { id: string; name: string; location: string };
@@ -19,7 +22,13 @@ function App() {
   const [section, setSection] = useState(window.location.hash);
   const [adminCreated, setAdminCreated] = useState(false);
   const [notificationRequest, setNotificationRequest] = useState({ id: '' });
-  const tab = section === '#people' && user?.role === 'administrator' ? 'admin' : 'requests';
+  const [route, query] = section.split('?');
+  const tab = user?.role === 'administrator' && route === '#people' ? 'admin'
+    : user?.role === 'administrator' && route === '#assets' ? 'assets'
+    : user?.role === 'administrator' && (!route || route === '#dashboard') ? 'dashboard' : 'requests';
+  const queueParams = new URLSearchParams(query);
+  const queueFocus = queueParams.get('focus') ?? '';
+  const initialFocus = Object.hasOwn(queues, queueFocus) ? queueFocus as QueueFocus : '';
 
   function signOut() {
     setToken(null); setUser(null); setBranches([]); setSection('');
@@ -52,6 +61,10 @@ function App() {
       if (!profile.ok || !branchResponse.ok) throw new Error('Unable to load your workspace.');
       const nextUser: User = await profile.json();
       const nextBranches: Branch[] = await branchResponse.json();
+      if (['#setup', '#signin'].includes(window.location.hash)) {
+        window.history.replaceState(null, '', window.location.pathname + window.location.search);
+        setSection('');
+      }
       setBranches(nextBranches); setUser(nextUser); setToken(access_token);
     } catch (err) {
       setError(err instanceof TypeError ? 'Cannot connect to FixTrack. Check that the API is running.'
@@ -78,6 +91,8 @@ function App() {
       <a className="brand" href="#requests"><span className="brand-mark"><Icon name="mark" size={24} /></span>FixTrack</a>
       <nav className="workspace-nav" aria-label="Workspace">
         <p className="eyebrow nav-label">Workspace</p>
+        {user.role === 'administrator' && <a href="#dashboard" aria-current={tab === 'dashboard' ? 'page' : undefined}><Icon name="dashboard" />Overview</a>}
+        {user.role === 'administrator' && <a href="#assets" aria-current={tab === 'assets' ? 'page' : undefined}><Icon name="asset" />Assets</a>}
         <a href="#requests" aria-current={tab === 'requests' ? 'page' : undefined}><Icon name="requests" />{requestLabel}</a>
         {user.role === 'administrator' && <a href="#people" aria-current={tab === 'admin' ? 'page' : undefined}><Icon name="people" />People &amp; branches</a>}
       </nav>
@@ -85,16 +100,24 @@ function App() {
     </aside>
     <div className="app-body">
       <header className="app-header">
-        <div className="breadcrumb"><span>Workspace</span><span aria-hidden="true">/</span><strong>{tab === 'admin' ? 'People & branches' : requestLabel}</strong></div>
+        <div className="breadcrumb"><span>Workspace</span><span aria-hidden="true">/</span><strong>{tab === 'admin' ? 'People & branches' : tab === 'dashboard' ? 'Overview' : tab === 'assets' ? 'Assets' : requestLabel}</strong></div>
         <div className="session"><Notifications token={token} onExpired={signOut} onOpen={id => {
           setNotificationRequest({ id });
           window.location.hash = '#requests';
         }} /><span className="avatar" aria-hidden="true">{initials}</span><div className="session-user"><strong>{user.full_name}</strong><small>{user.role.replaceAll('_', ' ')}</small></div>
-          <button className="secondary sign-out" onClick={signOut}><Icon name="logout" size={17} />Sign out</button></div>
+          <button type="button" className="secondary sign-out header-icon" aria-label="Sign out" title="Sign out"
+            onClick={signOut}><Icon name="logout" size={18} /></button></div>
       </header>
       <main className="workspace" id="workspace" tabIndex={-1}>
-        {tab === 'requests' ? <Requests token={token} role={user.role} branches={branches} onExpired={signOut} openedRequest={notificationRequest} />
-          : <Admin token={token} branches={branches} refreshBranches={refreshBranches} onExpired={signOut} />}
+        {tab === 'requests' ? <Requests token={token} role={user.role} branches={branches} onExpired={signOut} openedRequest={notificationRequest}
+          initialFocus={initialFocus} initialBranch={queueParams.get('branch_id') ?? ''} />
+          : tab === 'dashboard' ? <Dashboard token={token} branches={branches} onExpired={signOut} onRequest={id => {
+              setNotificationRequest({ id }); window.location.hash = '#requests';
+            }} />
+            : tab === 'assets' ? <Assets token={token} branches={branches} onExpired={signOut} onRequest={id => {
+              setNotificationRequest({ id }); window.location.hash = '#requests';
+            }} />
+            : <Admin token={token} branches={branches} refreshBranches={refreshBranches} onExpired={signOut} />}
       </main>
     </div>
   </div>;

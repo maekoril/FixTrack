@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { pollWhileVisible } from './liveUpdates';
+import { Icon } from './Icon';
 
 type Item = { id: string; request_id: string; title: string; action: string;
   created_at: string; read: boolean };
@@ -66,9 +67,15 @@ export function Notifications({ token, onExpired, onOpen }: {
     onOpen(item.request_id);
   }
 
+  const unread = inbox?.unread ?? 0;
+  const buttonLabel = unread ? `Notifications (${unread} unread)` : 'Notifications';
+
   return <div className="notification-menu">
-    <button type="button" className="secondary" aria-expanded={open} aria-controls="notification-inbox"
-      onClick={() => setOpen(!open)}>Notifications{inbox?.unread ? ` (${inbox.unread})` : ''}</button>
+    <button type="button" className="secondary header-icon" aria-label={buttonLabel} title={buttonLabel}
+      aria-expanded={open} aria-controls={open ? 'notification-inbox' : undefined} onClick={() => setOpen(!open)}>
+      <Icon name="bell" size={18} />
+      {unread > 0 && <span className="header-unread" aria-hidden="true">{unread > 99 ? '99+' : unread}</span>}
+    </button>
     {open && <section id="notification-inbox" className="card notification-inbox" aria-label="Notifications">
       {error && <p role="alert">{error}</p>}
       {!inbox && !error && <p role="status">Loading notifications…</p>}

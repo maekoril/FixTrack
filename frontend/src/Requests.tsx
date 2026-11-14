@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Icon } from './Icon';
+import { queues, type QueueFocus } from './Dashboard';
 import { pollWhileVisible } from './liveUpdates';
+import { PhotoGallery, photoTypes, uploadPhoto, type Photo } from './Photos';
 
 type Branch = { id: string; name: string };
 type Asset = { id: string; name: string; asset_tag: string };
@@ -8,6 +10,7 @@ type ServiceRequest = { id: string; title: string; description: string; location
   branch_name: string; submitted_by_name: string; status: string; priority: string | null;
   created_at: string; asset_name: string | null };
 type Detail = ServiceRequest & {
+  photos: Photo[];
   eligible_technicians: { id: string; full_name: string }[] | null;
   work_orders: { id: string; technician_id: string; status: string; labor_cost: string; materials_cost: string }[];
   maintenance_logs: { id: string; work_order_id: string; action: string; notes: string;
@@ -16,7 +19,8 @@ type Detail = ServiceRequest & {
     created_at: string; details: { from?: string; to?: string; technician_name?: string;
       reason?: string; notes?: string; work_order_id?: string; previous_technician_name?: string } }[];
 };
-type Props = { token: string; role: string; branches: Branch[]; onExpired: () => void; openedRequest: { id: string } };
+type Props = { token: string; role: string; branches: Branch[]; onExpired: () => void;
+  openedRequest: { id: string }; initialFocus: QueueFocus | ''; initialBranch: string };
 const pageSize = 25;
 const label = (value: string) => value.replaceAll('_', ' ');
 const date = (value: string) => new Date(value).toLocaleString();
@@ -33,7 +37,7 @@ function MaintenanceHistory({ logs }: { logs: Detail['maintenance_logs'] }) {
   </>;
 }
 
-export function Requests({ token, role, branches, onExpired, openedRequest }: Props) {
+export function Requests({ token, role, branches, onExpired, openedRequest, initialFocus, initialBranch }: Props) {
   const [items, setItems] = useState<ServiceRequest[]>([]);
   const [detail, setDetail] = useState<Detail | null>(null);
   const detailPanel = useRef<HTMLElement>(null);
@@ -43,7 +47,8 @@ export function Requests({ token, role, branches, onExpired, openedRequest }: Pr
   const reportButton = useRef<HTMLButtonElement>(null);
   const [detailFailed, setDetailFailed] = useState(false);
   const [selected, setSelected] = useState(openedRequest.id);
-  const [branch, setBranch] = useState('');
+  const [branch, setBranch] = useState(initialBranch);
+  const [focus, setFocus] = useState(initialFocus);
   const [status, setStatus] = useState('');
   const [priority, setPriority] = useState('');
   const [search, setSearch] = useState('');
@@ -75,12 +80,18 @@ export function Requests({ token, role, branches, onExpired, openedRequest }: Pr
   }, [openedRequest]);
 
   useEffect(() => {
+    setFocus(initialFocus); setBranch(initialBranch);
+    setStatus(''); setPriority(''); setSearch(''); setOffset(0);
+  }, [initialFocus, initialBranch]);
+
+  useEffect(() => {
     const controller = new AbortController();
     setLoading(true); setError('');
     const query = new URLSearchParams({ offset: String(offset), limit: String(pageSize), search });
     if (branch) query.set('branch_id', branch);
     if (status) query.set('status', status);
     if (priority) query.set('priority', priority);
+    if (focus) query.set('focus', focus);
     let pending = false;
     async function refresh(background = false) {
       if (pending) return;
@@ -98,7 +109,7 @@ export function Requests({ token, role, branches, onExpired, openedRequest }: Pr
     void refresh();
     const stop = pollWhileVisible(() => refresh(true));
     return () => { controller.abort(); stop(); };
-  }, [branch, status, priority, search, offset, version, token]);
+  }, [branch, status, priority, search, focus, offset, version, token]);
 
   useEffect(() => {
     setDetail(null); setDetailFailed(false);
@@ -144,9 +155,17 @@ export function Requests({ token, role, branches, onExpired, openedRequest }: Pr
         title: data.get('title'), description: data.get('description'), location: data.get('location'),
         asset_id: data.get('asset_id') || null });
       setShowForm(false); setBranch(''); setStatus(''); setPriority(''); setSearch(''); setOffset(0);
-      setSelected(request.id); setVersion(v => v + 1);
+      setSelected(request.id);
       detailPanel.current?.focus();
       setNotice('Request submitted. Your administrator can now review it.');
+      const photo = data.get('photo');
+      if (photo instanceof File && photo.size) {
+        try { await uploadPhoto(token, request.id, photo); }
+        catch (err) {
+          setError(`The request was saved. ${err instanceof Error ? err.message : 'Photo upload failed.'} Use Add issue photo to try again.`);
+        }
+      }
+      setVersion(v => v + 1);
     } catch (err) { setError(err instanceof Error ? err.message : 'Unable to submit request.'); }
     finally { setBusy(false); }
   }
@@ -195,6 +214,22 @@ export function Requests({ token, role, branches, onExpired, openedRequest }: Pr
     void updateWork(orderId, operation, Object.fromEntries(new FormData(event.currentTarget)));
   }
 
+  async function attachPhoto(event: FormEvent<HTMLFormElement>, orderId?: string) {
+    event.preventDefault();
+    if (!detail || detail.id !== selected || busy) return;
+    const form = event.currentTarget;
+    const photo = new FormData(form).get('photo');
+    if (!(photo instanceof File) || !photo.size) return;
+    setBusy(true); setError(''); setNotice('');
+    try {
+      await uploadPhoto(token, detail.id, photo, orderId);
+      form.reset();
+      setVersion(v => v + 1);
+      setNotice('Photo added.');
+    } catch (err) { setError(err instanceof Error ? err.message : 'Unable to upload photo.'); }
+    finally { setBusy(false); }
+  }
+
   async function reviewWork(event: FormEvent<HTMLFormElement>, decision: 'verify' | 'return') {
     event.preventDefault();
     const order = detail?.work_orders.at(-1);
@@ -230,9 +265,20 @@ export function Requests({ token, role, branches, onExpired, openedRequest }: Pr
         <label htmlFor="request-asset">Related asset (optional)</label><select key={formBranch} id="request-asset" name="asset_id" defaultValue="">
           <option value="">General facility issue / no registered asset</option>
           {assets.map(asset => <option key={asset.id} value={asset.id}>{asset.asset_tag} · {asset.name}</option>)}</select>
+        <label htmlFor="report-photo">Issue photo (optional)</label>
+        <input id="report-photo" name="photo" type="file" accept={photoTypes} aria-describedby="report-photo-hint" />
+        <p className="field-hint" id="report-photo-hint">JPEG, PNG, or WebP up to 8 MB.</p>
         <div className="actions"><button>{busy ? 'Submitting…' : 'Submit request'}<Icon name="arrow" size={16} /></button>
           <button type="button" className="secondary" onClick={() => { setShowForm(false); reportButton.current?.focus(); }}>Cancel</button></div>
       </fieldset></form></section>}
+    {focus && <div className="dashboard-queue-filter">
+      <span className="badge">{queues[focus].label}</span>
+      <button className="secondary" onClick={() => {
+        setFocus(''); setOffset(0);
+        const query = branch ? `?${new URLSearchParams({ branch_id: branch })}` : '';
+        window.location.hash = `#requests${query}`;
+      }}>Clear dashboard filter</button>
+    </div>}
     <div className="card request-filters">
       <div><label htmlFor="filter-search">Search title</label><div className="search-field"><Icon name="search" size={18} /><input id="filter-search" type="search" maxLength={180} value={search} placeholder="Search…" onChange={event => { setSearch(event.target.value); setOffset(0); }} /></div></div>
       <div><label htmlFor="filter-branch">Branch</label><select id="filter-branch" value={branch} onChange={event => { setBranch(event.target.value); setOffset(0); }}><option value="">All branches</option>{branches.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
@@ -261,9 +307,19 @@ export function Requests({ token, role, branches, onExpired, openedRequest }: Pr
           <div className="actions"><span className={`badge status-${detail.status}`}>{label(detail.status)}</span><span className={`badge priority-${detail.priority}`}>{detail.priority ?? 'Not prioritized'}</span></div>
           <dl><dt>Branch / location</dt><dd>{detail.branch_name} · {detail.location}</dd><dt>Related asset</dt><dd>{detail.asset_name ?? 'General facility issue / no registered asset'}</dd><dt>Reported by</dt><dd>{detail.submitted_by_name}</dd><dt>Submitted</dt><dd>{date(detail.created_at)}</dd></dl>
           <h3>Description</h3><p className="description">{detail.description}</p>
-          {role === 'administrator' && detail.status !== 'closed' && <form key={detail.id} onSubmit={prioritize}><label htmlFor="priority">Set priority</label><select id="priority" name="priority" defaultValue={detail.priority ?? ''} required disabled={busy}><option value="" disabled>Select priority</option>{['low', 'medium', 'high', 'urgent'].map(value => <option key={value} value={value}>{value}</option>)}</select><button disabled={busy}>Save priority</button></form>}
+          <PhotoGallery key={`photos-${detail.id}`} token={token} requestId={detail.id} photos={detail.photos} />
+          {role === 'branch_manager' && detail.status !== 'closed' && (
+            <form onSubmit={event => void attachPhoto(event)}>
+              <fieldset disabled={busy}>
+                <label htmlFor="issue-photo">Issue photo</label>
+                <input id="issue-photo" name="photo" type="file" required accept={photoTypes} />
+                <button className="secondary">Add issue photo</button>
+              </fieldset>
+            </form>
+          )}
+          {role === 'administrator' && detail.status !== 'closed' && <form key={`priority-${detail.id}`} onSubmit={prioritize}><label htmlFor="priority">Set priority</label><select id="priority" name="priority" defaultValue={detail.priority ?? ''} required disabled={busy}><option value="" disabled>Select priority</option>{['low', 'medium', 'high', 'urgent'].map(value => <option key={value} value={value}>{value}</option>)}</select><button disabled={busy}>Save priority</button></form>}
           {detail.status === 'submitted' && !detail.work_orders.length && detail.eligible_technicians && (detail.eligible_technicians.length ? (
-            <form key={detail.id} onSubmit={assignTechnician}>
+            <form key={`assignment-${detail.id}`} onSubmit={assignTechnician}>
               <label htmlFor="technician">Technician</label>
               <select id="technician" name="technician_id" defaultValue="" required disabled={busy}>
                 <option value="" disabled>Select technician</option>
@@ -311,6 +367,13 @@ export function Requests({ token, role, branches, onExpired, openedRequest }: Pr
               </dl>}
               <MaintenanceHistory logs={detail.maintenance_logs.filter(log => log.work_order_id === order.id)} />
               {role === 'technician' && detail.status === 'in_progress' && order.status === 'in_progress' && <>
+                <form onSubmit={event => void attachPhoto(event, order.id)}>
+                  <fieldset disabled={busy}>
+                    <label htmlFor={`repair-photo-${order.id}`}>Repair photo</label>
+                    <input id={`repair-photo-${order.id}`} name="photo" type="file" accept={photoTypes} required />
+                    <button className="secondary">Add repair photo</button>
+                  </fieldset>
+                </form>
                 <form onSubmit={event => submitWork(event, order.id, 'logs')}>
                   <fieldset disabled={busy}>
                     <label htmlFor={`action-${order.id}`}>Maintenance action</label>

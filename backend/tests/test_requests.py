@@ -1,6 +1,8 @@
 import uuid
+from io import BytesIO
 
 import pytest
+from PIL import Image
 from sqlalchemy import select
 
 from app.models import (
@@ -52,6 +54,147 @@ def report(branch_id, **overrides):
         "location": "Meeting room",
         **overrides,
     }
+
+
+def test_dashboard_counts_match_branch_scoped_queues(client, account, people):
+    branch, outside, manager, _, outsider, technician = people
+    admin = auth(account)
+    dashboard = "/api/requests/dashboard"
+
+    def submit(reporter, branch_id):
+        return client.post("/api/requests", headers=auth(reporter), json=report(branch_id)).json()
+
+    def assign(request):
+        return client.post(
+            f"/api/requests/{request['id']}/work-orders",
+            headers=admin,
+            json={"technician_id": str(technician.id)},
+        ).json()
+
+    waiting = submit(manager, branch.id)
+    assigned = submit(manager, branch.id)
+    assign(assigned)
+    active = submit(manager, branch.id)
+    completed = submit(manager, branch.id)
+    for request in (active, completed):
+        order = assign(request)
+        path = f"/api/requests/{request['id']}/work-orders/{order['id']}"
+        assert client.post(f"{path}/start", headers=auth(technician)).status_code == 200
+    assert (
+        client.post(
+            f"{path}/complete",
+            headers=auth(technician),
+            json={"labor_cost": "0", "materials_cost": "0"},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.patch(
+            f"/api/requests/{active['id']}/priority", headers=admin, json={"priority": "urgent"}
+        ).status_code
+        == 200
+    )
+    closed = submit(manager, branch.id)
+    order = assign(closed)
+    closed_path = f"/api/requests/{closed['id']}"
+    work = f"{closed_path}/work-orders/{order['id']}"
+    assert (
+        client.patch(
+            f"{closed_path}/priority", headers=admin, json={"priority": "urgent"}
+        ).status_code
+        == 200
+    )
+    assert client.post(f"{work}/start", headers=auth(technician)).status_code == 200
+    assert (
+        client.post(
+            f"{work}/complete",
+            headers=auth(technician),
+            json={"labor_cost": "0", "materials_cost": "0"},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            f"{closed_path}/verify", headers=admin, json={"work_order_id": order["id"]}
+        ).status_code
+        == 200
+    )
+    submit(outsider, outside.id)
+    expected = {
+        "needs_assignment": waiting,
+        "urgent_open": active,
+        "work_in_progress": active,
+        "awaiting_verification": completed,
+    }
+    assert client.get(dashboard, headers=auth(manager)).status_code == 403
+    assert client.get(dashboard, headers=admin).json() == dict.fromkeys(expected, 1)
+    assert client.get(dashboard, headers=admin, params={"branch_id": outside.id}).json() == (
+        dict.fromkeys(expected, 0)
+    )
+    for focus, request in expected.items():
+        result = client.get(
+            "/api/requests", headers=admin, params={"focus": focus, "branch_id": branch.id}
+        )
+        assert [item["id"] for item in result.json()] == [request["id"]]
+
+
+def test_private_issue_and_repair_photos(client, db, account, people):
+    branch, _, manager, colleague, _, technician = people
+    source = BytesIO()
+    Image.new("RGB", (640, 480), "blue").save(source, "PNG")
+    admin, reporter, tech = auth(account), auth(manager), auth(technician)
+    created = client.post("/api/requests", headers=reporter, json=report(branch.id)).json()
+    path = f"/api/requests/{created['id']}"
+    photos = f"{path}/photos"
+    assert (
+        client.post(
+            photos, headers=reporter, params={"name": "fake.png"}, content=b"invalid"
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            photos,
+            headers=reporter,
+            params={"name": "large.png"},
+            content=b"x" * (8 * 1024 * 1024 + 1),
+        ).status_code
+        == 413
+    )
+    added = client.post(
+        photos, headers=reporter, params={"name": "leak.png"}, content=source.getvalue()
+    )
+    assert added.status_code == 201
+    photo_id = added.json()["id"]
+    photo_url = f"{photos}/{photo_id}"
+    assert client.get(photo_url, headers=auth(colleague)).status_code == 404
+    assert client.get(photo_url, headers=tech).status_code == 404
+    assert client.get(photo_url).status_code == 401
+    preview = client.get(photo_url, headers=admin, params={"thumbnail": True})
+    assert preview.headers["cache-control"] == "private, no-store"
+    assert Image.open(BytesIO(preview.content)).size == (360, 270)
+    assert Image.open(BytesIO(client.get(photo_url, headers=admin).content)).size == (640, 480)
+    order = client.post(
+        f"{path}/work-orders", headers=admin, json={"technician_id": str(technician.id)}
+    ).json()
+    order_path = f"{path}/work-orders/{order['id']}"
+    params = {"name": "repaired.png", "work_order_id": order["id"]}
+    assert (
+        client.post(photos, headers=tech, params=params, content=source.getvalue()).status_code
+        == 409
+    )
+    assert client.post(f"{order_path}/start", headers=tech).status_code == 200
+    assert client.get(photo_url, headers=tech).status_code == 200
+    repair = client.post(photos, headers=tech, params=params, content=source.getvalue())
+    assert repair.status_code == 201
+    metadata = client.get(path, headers=reporter).json()["photos"]
+    assert {photo["id"]: photo["work_order_id"] for photo in metadata} == {
+        photo_id: None,
+        repair.json()["id"]: order["id"],
+    }
+    db.delete(db.get(BranchAccess, (technician.id, branch.id)))
+    db.commit()
+    assert client.get(photo_url, headers=tech).status_code == 404
 
 
 def test_submission_detail_history_and_priority(client, db, account, people):

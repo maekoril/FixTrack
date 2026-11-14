@@ -11,6 +11,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     ForeignKeyConstraint,
+    LargeBinary,
     Numeric,
     String,
     Text,
@@ -83,6 +84,7 @@ class Asset(Record, Base):
     asset_tag: Mapped[str] = mapped_column(String(80), unique=True)
     name: Mapped[str] = mapped_column(String(150))
     condition: Mapped[str] = mapped_column(String(80))
+    location: Mapped[str] = mapped_column(String(255), default="", server_default="")
 
 
 class ServiceRequest(Record, Base):
@@ -152,3 +154,6 @@ class Attachment(Record, Base):
     storage_key: Mapped[str] = mapped_column(String(255), unique=True)
     original_name: Mapped[str] = mapped_column(String(255))
     content_type: Mapped[str] = mapped_column(String(100))
+    work_order_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("work_orders.id"))
+    image_data: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)
+    thumbnail_data: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)

@@ -10,9 +10,9 @@ The original November 2026 proposal was prepared for Laguna State Polytechnic Un
 
 | Role | Available on the baseline branch | Intended responsibilities beyond the baseline |
 | --- | --- | --- |
-| Branch Manager | Report equipment or facility issues and track their own requests and activity within their current branch access. | Attach an optional issue photo and follow the report through verified closure. |
-| Administrator | Manage branch accounts, triage requests, assign work, verify and close repairs, or return repairs with follow-up instructions. | Review branch workload and costs through dashboards. |
-| Technician | Start and complete initial and follow-up work orders. Record diagnosis, progress, repair actions, and labor and materials costs. | Record asset repair history and attach supporting photos as those workflows are added. |
+| Branch Manager | Report equipment or facility issues, attach optional photos, and track their own requests through verified closure. | |
+| Administrator | Manage branch accounts, triage requests, assign work, verify and close repairs, or return repairs with follow-up instructions. View branch workload from the Dashboard. | Review cost trends and asset repair history. |
+| Technician | Start and complete initial and follow-up work orders. Record diagnosis, progress, repair actions, labor and materials costs, and repair photos. | Review asset repair history. |
 
 ## Workflow and scope
 
@@ -31,10 +31,26 @@ reports and completion alerts, technicians receive assignments and follow-ups, a
 receive updates on their own reports. Inbox queries enforce current request access. Visible tabs
 refresh the inbox, request queue, and open request every five seconds.
 
+The administrator Dashboard counts requests needing assignment, urgent open requests, work orders
+in progress, and repairs awaiting verification. It uses current branch grants and links each count
+to the matching request queue. A prominent verification panel links to completed work, and
+the urgent list opens individual requests. Counts and up to four urgent requests refresh every
+five seconds while the tab is visible. Administrators can pause and resume overview updates;
+the displayed update time shows the last successful refresh.
+
 **Delivery order from the development plan**
 
-1. Asset registry management and protected photo uploads.
-2. Branch dashboards, asset repair history, and cost summaries. Intended dashboard views cover open requests, ongoing repairs, completed work, and recorded costs.
+1. Expanded cost summaries and asset reporting.
+
+Administrators can register and edit branch equipment in Assets, search by tag or name, and
+view linked request and work-order history with total recorded repair costs. Existing assets
+receive an empty location through migration. Assets keep their original branch.
+
+The interface uses ink navigation, ivory surfaces, maintenance amber accents, condensed
+display headings, and consistent line icons. The overview pairs a prominent verification
+panel with operational counts and urgent requests. Shared styles cover sign-in, requests,
+assets, and account management, with responsive layouts and short entrance, selection,
+and hover transitions. Reduced-motion preferences disable animations and transitions.
 
 **Future expansion.** Preventive maintenance scheduling, asset QR codes, email or SMS notifications, service targets and escalation, spare-parts inventory, purchase requests, external service providers, offline mobile capture and synchronization, and longer-term recurring-failure and replacement analysis.
 
@@ -45,13 +61,13 @@ refresh the inbox, request queue, and open request every five seconds.
 - Administrator account controls apply only to branch managers and technicians whose entire branch grant set is within the acting administrator's scope. Both roles require one or more branches. The role migration converts existing employees and retains their grants and history. Administrators can grant only branches they already hold. Creating a branch grants the creator access. The current UI supports branch creation. Branch rename and deletion are outside the current interface.
 - The first administrator can be provisioned through the browser with an optional setup token. Browser provisioning closes once an administrator exists. The bootstrap CLI can also provision administrators. The management API creates, reassigns and enables or disables branch manager and technician accounts. A disabled account cannot sign in or reuse an issued token. Accounts use Argon2 password hashing and expiring JWT bearer tokens with a 30-minute default. The React client keeps tokens in memory. Refresh requires sign-in, and client sign-out clears local session state while an issued token remains valid until expiry, subject to account and permission checks.
 - Missing and out-of-scope request IDs return the same 404. A closed request returns 409 on reprioritization. Priority updates lock the request row and record an event only when the value changes. Submission and priority events commit in the same transaction as their corresponding changes. Keep future request events and maintenance logs append-only in application operations.
-- Attachment files are intended to stay private. Enforce parent-request access on future downloads. The schema has attachment metadata, and the existing asset selector reads existing branch registry records. The baseline has no attachment transfer or asset registry management API.
+- Issue and repair photos are private. Branch managers upload to their own open requests, and technicians upload while working on an assigned order. Both thumbnails and larger images require current access to the parent request. The server re-encodes images as JPEG without original metadata and stores both sizes in PostgreSQL.
 
 ## Architecture and data
 
 The proposal groups the product into Core/User Management, Request Management, Work Order Management, Asset Management, Cost Tracking, and Reporting & Dashboard. Core supplies identity and branch access. Work orders build on requests, costs are recorded against work orders, and reporting reads operational records. These are product modules with a shared backend and database.
 
-- **Frontend:** React, TypeScript and Vite with plain CSS. `frontend/src/main.tsx` owns sign-in, in-memory session state and workspace navigation. `Admin.tsx` renders People & branches, `Requests.tsx` renders reporting and triage, and `style.css` holds responsive styles.
+- **Frontend:** React, TypeScript and Vite with plain CSS. `frontend/src/main.tsx` owns sign-in, in-memory session state and workspace navigation. `Admin.tsx` renders People & branches, `Requests.tsx` renders reporting and triage, `Dashboard.tsx` renders the overview, and `Assets.tsx` renders the equipment registry. `style.css` holds base component styles and `workspace.css` holds the shared visual theme and responsive layouts.
 - **Backend:** Python 3.14, FastAPI, Pydantic, SQLAlchemy and Alembic. `backend/app/main.py` wires the app and health, auth and branch routes. `security.py` handles tokens and current user checks. `admin.py` implements account and branch management. `requests.py` contains scoped queries, request payloads, event history and triage. `bootstrap.py` provisions an administrator with a privately prompted password.
 - **Storage:** PostgreSQL 17, UUIDs, timezone-aware timestamps and decimal money fields. Schema changes go through Alembic. Server startup does not create tables or default accounts.
 
@@ -60,7 +76,7 @@ The proposal groups the product into Core/User Management, Request Management, W
 | `branches`, `users`, `branch_access` | A single user table represents all three roles. A join table grants branches. Users have a unique email, activation flag, and optional specialization. |
 | `assets`, `service_requests` | Assets have a unique tag, branch and condition. Requests have a branch, submitter, location, nullable priority and optional asset. A composite foreign key enforces same-branch asset references. Closure fields capture who closed a request and when. |
 | `work_orders`, `maintenance_logs` | A request may have many work orders. Each stores the technician and assigning user, work status, and separate nonnegative labor and materials costs. Maintenance logs store the recorder, action, notes, and timestamp. |
-| `request_events`, `attachments` | Events store a request, actor, action, timestamp and structured details. Attachments store a parent request, uploader, storage key, original filename and content type. Photo bytes belong in private storage. |
+| `request_events`, `attachments` | Events store a request, actor, action, timestamp and structured details. Attachments store a parent request, optional work order, uploader, original filename, and private image and thumbnail bytes. |
 
 The proposal's production topology is browser → HTTPS web gateway → FastAPI → private PostgreSQL, with a private volume for photos. The gateway serves the frontend and proxies `/api`. Separate branch subnets with site-to-site IPsec VPNs are an illustrative deployment option. Local development demonstrates the workflows on one computer. Production hardening still includes login throttling, session and recovery policy, secrets, HTTPS and reverse-proxy configuration, attachment validation, backups, and monitoring.
 
@@ -71,6 +87,8 @@ The proposal's production topology is browser → HTTPS web gateway → FastAPI 
 | Health and identity | `GET /api/health`, `GET /api/ready`, `POST /api/auth/login`, `GET /api/auth/me`, `GET /api/branches` |
 | Initial setup | `POST /api/setup/admin` with `X-Setup-Token` when browser setup is enabled |
 | Notifications | `GET /api/notifications`, `PUT /api/notifications/{event_id}/read` |
+| Photos | `POST /api/requests/{request_id}/photos`, `GET /api/requests/{request_id}/photos/{photo_id}` with optional `thumbnail=true` |
+| Administrator dashboard | `GET /api/requests/dashboard` with optional `branch_id`. Queue links use `focus` on `GET /api/requests`. |
 | Administrator | `POST /api/admin/branches`, `GET /api/admin/users`, `POST /api/admin/users`, `PUT /api/admin/users/{user_id}/branches`, `PATCH /api/admin/users/{user_id}/active` |
 | Technician progress | `POST /api/requests/{request_id}/work-orders/{work_order_id}/logs`, `POST /api/requests/{request_id}/work-orders/{work_order_id}/complete` |
 | Administrator repair review | `POST /api/requests/{request_id}/verify`, `POST /api/requests/{request_id}/return` |

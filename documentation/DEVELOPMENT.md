@@ -10,8 +10,8 @@
   from referencing an asset from another branch. General facility requests need no asset.
 - A request can have multiple work orders. Each work order has one technician, labor and material
   costs, and maintenance logs. Request events record the actor and changes.
-- Attachment metadata is modeled; uploads and downloads are not implemented yet. Files will
-  stay private, and download handlers must enforce the parent request's access rules.
+- Photos are stored in PostgreSQL with their thumbnails. Uploads and downloads enforce current
+  access to the parent request. Accepted images are decoded and re-encoded without source metadata.
 - Passwords use Argon2; short-lived signed bearer tokens identify the current user. Account
   activation and current permissions are read from the database on protected requests.
 - The frontend keeps its bearer token in React state for administrator operations. Refresh
@@ -59,13 +59,13 @@ The assigned technician can start work while they have branch access. Starting w
 order and request to `in_progress` and records a history event in the same transaction. Repeating
 the start while both are in progress returns the existing state without adding another event. Completion records nonnegative labor and materials amounts with up to two decimal places. Costs, the completed work order, the request awaiting verification, and its completion event commit together. Retrying completion with the same costs returns the saved order. Administrators and the assigned technician can read the logs and costs. Branch managers can see the maintenance history, request status, and completion event for their own accessible requests. Work-order costs remain visible to administrators and assigned technicians.
 Request lists default to 25 records with a maximum of 100 and support an offset.
-The asset selector reads existing registry records; asset registry management and private
-photo uploads are not implemented yet.
+The asset selector reads branch registry records. Administrators use `GET/POST /api/assets`,
+`GET /api/assets/{id}`, and `PATCH /api/assets/{id}` for registration, editing, and repair history.
+Asset history and cost totals follow current administrator branch grants.
 
 ## Next milestones
 
-1. Asset registry management and protected photo uploads.
-2. Branch dashboards, asset repair history, and cost summaries.
+1. Expanded asset reporting and cost summaries.
 
 Requests move from `submitted` to `in_progress` to `awaiting_verification` to `closed`.
 An administrator can send a request back to `in_progress` with instructions and a new work order.

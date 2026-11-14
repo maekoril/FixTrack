@@ -1,17 +1,19 @@
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
+from enum import StrEnum
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, StringConstraints, field_serializer
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.admin import administrator, branch_ids
 from app.db import get_db
 from app.models import (
     Asset,
+    Attachment,
     Branch,
     BranchAccess,
     MaintenanceLog,
@@ -27,6 +29,27 @@ from app.models import (
 from app.security import current_user
 
 router = APIRouter(prefix="/api/requests", tags=["Service requests"])
+
+
+class QueueFocus(StrEnum):
+    needs_assignment = "needs_assignment"
+    urgent_open = "urgent_open"
+    work_in_progress = "work_in_progress"
+    awaiting_verification = "awaiting_verification"
+
+
+def queue_conditions():
+    orders = select(WorkOrder.id).where(WorkOrder.request_id == ServiceRequest.id)
+    return {
+        QueueFocus.needs_assignment: (ServiceRequest.status == RequestStatus.submitted)
+        & ~orders.exists(),
+        QueueFocus.urgent_open: (ServiceRequest.priority == Priority.urgent)
+        & (ServiceRequest.status != RequestStatus.closed),
+        QueueFocus.work_in_progress: (ServiceRequest.status == RequestStatus.in_progress)
+        & orders.where(WorkOrder.status == WorkStatus.in_progress).exists(),
+        QueueFocus.awaiting_verification: ServiceRequest.status
+        == RequestStatus.awaiting_verification,
+    }
 
 
 class RequestInput(BaseModel):
@@ -121,11 +144,18 @@ class CompletionInput(BaseModel):
     materials_cost: Money
 
 
+class PhotoOutput(BaseModel, from_attributes=True):
+    id: uuid.UUID
+    original_name: str
+    work_order_id: uuid.UUID | None
+
+
 class DetailOutput(RequestOutput):
     events: list[EventOutput]
     eligible_technicians: list[TechnicianOption] | None = None
     work_orders: list[WorkOrderOutput]
     maintenance_logs: list[MaintenanceLogOutput]
+    photos: list[PhotoOutput]
 
 
 class PriorityInput(BaseModel):
@@ -206,11 +236,14 @@ def list_requests(
     branch_id: uuid.UUID | None = None,
     status: RequestStatus | None = None,
     priority: Priority | None = None,
+    focus: QueueFocus | None = None,
     search: str = Query(default="", max_length=180),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=25, ge=1, le=100),
 ):
     query = visible(user, db)
+    if focus:
+        query = query.where(queue_conditions()[focus])
     if branch_id:
         query = query.where(ServiceRequest.branch_id == branch_id)
     if status:
@@ -221,6 +254,24 @@ def list_requests(
         query = query.where(ServiceRequest.title.icontains(search.strip(), autoescape=True))
     query = query.order_by(ServiceRequest.created_at.desc(), ServiceRequest.id.desc())
     return [output(request, db) for request in db.scalars(query.offset(offset).limit(limit))]
+
+
+@router.get("/dashboard", response_model=dict[QueueFocus, int])
+def dashboard(
+    branch_id: uuid.UUID | None = None,
+    user: User = Depends(administrator),
+    db: Session = Depends(get_db),
+):
+    scoped = visible(user, db)
+    if branch_id is not None:
+        scoped = scoped.where(ServiceRequest.branch_id == branch_id)
+    counts = [
+        func.count().filter(condition).label(focus.value)
+        for focus, condition in queue_conditions().items()
+    ]
+    return dict(
+        db.execute(scoped.with_only_columns(*counts, maintain_column_froms=True)).mappings().one()
+    )
 
 
 @router.get("/assets")
@@ -275,6 +326,11 @@ def detail(
         "eligible_technicians": technicians,
         "work_orders": work_orders,
         "maintenance_logs": maintenance_logs,
+        "photos": db.scalars(
+            select(Attachment)
+            .where(Attachment.request_id == request.id, Attachment.image_data.is_not(None))
+            .order_by(Attachment.created_at, Attachment.id)
+        ).all(),
         "events": [
             EventOutput(
                 id=event.id,

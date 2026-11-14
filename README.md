@@ -8,8 +8,9 @@ role and branch rules, implementation status, and the roadmap.
 
 **Status:** authentication, administrator account/branch controls, branch manager service requests,
 branch-scoped request review, priority changes, initial work-order assignment, starting repairs,
-maintenance logs, costs, technician completion, and administrator verification and closure
-are implemented. Asset registry management and photo uploads are upcoming.
+maintenance logs, costs, technician completion, administrator verification and closure,
+and private photo uploads are implemented. Administrators can manage the asset registry and
+review asset repair history and recorded costs.
 
 ## Repository layout
 
@@ -77,6 +78,9 @@ On macOS/Linux, use `.venv/bin/python` in place of `.venv\Scripts\python`.
 
 ## Try the request workflow
 
+Administrators can open **Dashboard** to see branch-scoped workload counts. Select a count to
+open its matching queue. The branch filter carries over to the queue.
+
 1. Sign in as an administrator and open **People & branches**.
 2. Create a Branch Manager account with access to one or more of your branches.
 3. Sign out and sign in as that branch manager. Select **Report an issue**, fill in its title,
@@ -105,6 +109,11 @@ technician, enter a reason, and choose **Reassign technician**.
 Open **Notifications** in the header to see new activity for your role. Opening an alert
 marks it read and takes you to the request. The inbox, queue, and open request refresh
 every five seconds while the tab is visible.
+
+Branch managers can attach an issue photo when reporting or add one to their open request.
+Technicians can add repair photos to an in-progress work order. Open a thumbnail in the
+request details to see the larger photo. Uploads support still JPEG, PNG, and WebP files
+up to 8 MB and 24 megapixels, with up to 20 photos per request.
 
 For an existing database, run `alembic upgrade head` before starting the updated API.
 The migration converts employee accounts to branch managers and preserves their branch grants,
