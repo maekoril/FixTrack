@@ -112,7 +112,7 @@ function App() {
             onClick={signOut}><Icon name="logout" size={18} /></button></div>
       </header>
       <main className="workspace" id="workspace" tabIndex={-1}>
-        {tab === 'requests' ? <Requests token={token} role={user.role} branches={branches} onExpired={signOut} openedRequest={notificationRequest}
+        {tab === 'requests' ? <Requests token={token} role={user.role} userId={user.id} branches={branches} onExpired={signOut} openedRequest={notificationRequest}
           initialFocus={initialFocus} initialBranch={queueParams.get('branch_id') ?? ''} />
           : tab === 'dashboard' ? <Dashboard token={token} branches={branches} onExpired={signOut} onRequest={id => {
               setNotificationRequest({ id }); window.location.hash = '#requests';

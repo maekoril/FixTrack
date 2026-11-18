@@ -11,7 +11,9 @@ from app.models import (
     Branch,
     BranchAccess,
     RequestEvent,
+    RequestStatus,
     Role,
+    ServiceCategory,
     ServiceRequest,
     User,
 )
@@ -55,6 +57,284 @@ def report(branch_id, **overrides):
         "location": "Meeting room",
         **overrides,
     }
+
+
+def test_categories_in_triage_and_queue(client, db, account, people):
+    branch, outside, manager, _, outsider, technician = people
+    admin = auth(account)
+    queue = "/api/requests"
+    plumbing = {"id": "plumbing", "name": "Plumbing"}
+    other = {"id": "other", "name": "Other"}
+    db.add_all([ServiceCategory(**plumbing), ServiceCategory(**other)])
+    db.commit()
+
+    def submit(reporter, branch_id):
+        response = client.post(queue, headers=auth(reporter), json=report(branch_id))
+        assert response.status_code == 201
+        assert response.json()["category"] is None
+        return response.json()["id"]
+
+    request_id = submit(manager, branch.id)
+    uncategorized_id = submit(manager, branch.id)
+    outside_id = submit(outsider, outside.id)
+    path = f"{queue}/{request_id}"
+
+    def categorize(category_id, headers=admin, target=request_id):
+        return client.patch(
+            f"{queue}/{target}/category", headers=headers, json={"category_id": category_id}
+        )
+
+    def filtered(category_id):
+        response = client.get(queue, headers=admin, params={"category_id": category_id})
+        assert response.status_code == 200
+        return {request["id"] for request in response.json()}
+
+    assert client.get(f"{queue}/categories", headers=admin).json() == [other, plumbing]
+    assert client.get(f"{queue}/categories", headers=auth(manager)).status_code == 403
+    assert categorize("plumbing", auth(manager)).status_code == 403
+    assert categorize("plumbing", auth(technician)).status_code == 403
+    assert categorize("plumbing", target=outside_id).status_code == 404
+    assert categorize("invalid").status_code == 422
+    assert categorize("plumbing").json()["category"] == plumbing
+    assert categorize("plumbing").status_code == 200
+    assert filtered("plumbing") == {request_id}
+    assert filtered("uncategorized") == {uncategorized_id}
+    assert categorize(None).json()["category"] is None
+    assert filtered("uncategorized") == {request_id, uncategorized_id}
+    assert categorize("other").json()["category"] == other
+
+    detail = client.get(path, headers=auth(manager)).json()
+    assert detail["category"] == other
+    changes = [
+        event["details"] for event in detail["events"] if event["action"] == "category_changed"
+    ]
+    assert len(changes) == 3
+    for change in [
+        {"from": None, "to": "Plumbing"},
+        {"from": "Plumbing", "to": None},
+        {"from": None, "to": "Other"},
+    ]:
+        assert change in changes
+
+    request = db.get(ServiceRequest, uuid.UUID(request_id))
+    request.status = RequestStatus.closed
+    db.commit()
+    assert categorize("plumbing").status_code == 409
+    assert client.get(path, headers=admin).json()["category"] == other
+
+
+def test_service_estimates_recalculate_and_preserve_manual_duration(client, db, account, people):
+    branch, outside, manager, _, outsider, technician = people
+    admin = auth(account)
+    queue = "/api/requests"
+    db.add_all(
+        [
+            ServiceCategory(id="plumbing", name="Plumbing"),
+            ServiceCategory(id="electrical", name="Electrical"),
+        ]
+    )
+    db.commit()
+
+    def submit(reporter, branch_id):
+        response = client.post(queue, headers=auth(reporter), json=report(branch_id))
+        assert response.status_code == 201
+        assert response.json()["difficulty"] is None
+        assert response.json()["estimated_duration_minutes"] is None
+        return response.json()["id"]
+
+    request_id = submit(manager, branch.id)
+    outside_id = submit(outsider, outside.id)
+    path = f"{queue}/{request_id}"
+
+    def estimate(difficulty, minutes, headers=admin, target=request_id):
+        return client.patch(
+            f"{queue}/{target}/estimate",
+            headers=headers,
+            json={"difficulty": difficulty, "duration_override_minutes": minutes},
+        )
+
+    def category(category_id):
+        response = client.patch(
+            f"{path}/category", headers=admin, json={"category_id": category_id}
+        )
+        assert response.status_code == 200
+        return response.json()
+
+    assert estimate("moderate", 90, auth(manager)).status_code == 403
+    assert estimate("moderate", 90, auth(technician)).status_code == 403
+    assert estimate("moderate", 90, target=outside_id).status_code == 404
+    assert estimate("urgent", None).status_code == 422
+    for invalid in (0, 10081, 2.5, "90", True):
+        assert estimate("moderate", invalid).status_code == 422
+
+    assert estimate(None, 45).json()["estimated_duration_minutes"] == 45
+    assert estimate("moderate", None).json()["estimated_duration_minutes"] is None
+    assert category("plumbing")["estimated_duration_minutes"] == 60
+    assert estimate("hard", None).json()["estimated_duration_minutes"] == 120
+    assert estimate("hard", 90).json()["estimated_duration_minutes"] == 90
+    assert estimate("hard", 90).status_code == 200
+    assert estimate("moderate", 90).json()["estimated_duration_minutes"] == 90
+    changed = category("electrical")
+    assert changed["suggested_duration_minutes"] == 75
+    assert changed["estimated_duration_minutes"] == 90
+    assert category(None)["estimated_duration_minutes"] == 90
+    category("electrical")
+    assert estimate("moderate", None).json()["estimated_duration_minutes"] == 75
+
+    detail = client.get(path, headers=auth(manager)).json()
+    assert detail["duration_suggestions"] == {"easy": 30, "moderate": 75, "hard": 150}
+    assert detail["difficulty"] == "moderate"
+    assert detail["estimated_duration_minutes"] == 75
+    changes = [
+        event["details"] for event in detail["events"] if event["action"] == "estimate_changed"
+    ]
+    assert len(changes) == 6
+    assert {
+        "previous": {"difficulty": "moderate", "duration_override_minutes": 90},
+        "updated": {"difficulty": "moderate", "duration_override_minutes": None},
+    } in changes
+
+    request = db.get(ServiceRequest, uuid.UUID(request_id))
+    request.status = RequestStatus.closed
+    db.commit()
+    assert estimate("easy", None).status_code == 409
+    assert client.get(path, headers=admin).json()["estimated_duration_minutes"] == 75
+
+
+def test_team_scheduling_pricing_and_verification(client, db, account, people):
+    branch, outside, manager, _, _, lead = people
+    admin = auth(account)
+
+    def technician(name, branch_id):
+        member = User(
+            email=f"{name}@example.com",
+            full_name=name,
+            role=Role.technician,
+            password_hash=account.password_hash,
+        )
+        db.add(member)
+        db.flush()
+        db.add(BranchAccess(user_id=member.id, branch_id=branch_id))
+        db.commit()
+        return member
+
+    assistant = technician("Assistant", branch.id)
+    second_lead = technician("Second", branch.id)
+    outsider = technician("Outside", outside.id)
+
+    def request_path():
+        response = client.post("/api/requests", headers=auth(manager), json=report(branch.id))
+        assert response.status_code == 201
+        return f"/api/requests/{response.json()['id']}"
+
+    def assign(path, technician_id, *assistants):
+        return client.post(
+            f"{path}/work-orders",
+            headers=admin,
+            json={
+                "technician_id": str(technician_id),
+                "assistant_ids": [str(member.id) for member in assistants],
+            },
+        )
+
+    first, second = request_path(), request_path()
+    assert assign(first, lead.id, lead).status_code == 422
+    assert assign(first, lead.id, outsider).status_code == 422
+    assigned = assign(first, lead.id, assistant)
+    assert assigned.status_code == 201
+    assert assigned.json()["assistants"] == [{"id": str(assistant.id), "full_name": "Assistant"}]
+    first_id = assigned.json()["id"]
+    first_order = f"{first}/work-orders/{first_id}"
+    assigned = assign(second, second_lead.id, assistant)
+    assert assigned.status_code == 201
+    second_order = f"{second}/work-orders/{assigned.json()['id']}"
+
+    def patch(order, action, **fields):
+        return client.patch(f"{order}/{action}", headers=admin, json=fields)
+
+    slot = "2027-01-04T09:00:00+08:00"
+    assert patch(first_order, "schedule", scheduled_start=slot).status_code == 422
+    assert (
+        client.patch(
+            first + "/estimate",
+            headers=admin,
+            json={"difficulty": None, "duration_override_minutes": 90},
+        ).status_code
+        == 200
+    )
+    scheduled = patch(first_order, "schedule", scheduled_start=slot)
+    assert scheduled.status_code == 200
+    assert scheduled.json()["scheduled_end"] == "2027-01-04T02:30:00+00:00"
+    appointment = client.get(first, headers=auth(manager)).json()["appointment"]
+    assert appointment["scheduled_start"] == "2027-01-04T01:00:00+00:00"
+    assert (
+        patch(second_order, "schedule", scheduled_start=slot, duration_minutes=60).status_code
+        == 409
+    )
+    assert patch(second_order, "team", assistant_ids=[]).status_code == 200
+    assert (
+        patch(second_order, "schedule", scheduled_start=slot, duration_minutes=60).status_code
+        == 200
+    )
+    assert patch(second_order, "team", assistant_ids=[str(assistant.id)]).status_code == 409
+    assert (
+        client.post(
+            f"{second_order}/reassign",
+            headers=admin,
+            json={
+                "previous_technician_id": str(second_lead.id),
+                "technician_id": str(assistant.id),
+                "reason": "Shift change",
+            },
+        ).status_code
+        == 409
+    )
+    assert (
+        patch(
+            second_order,
+            "schedule",
+            scheduled_start="2027-01-04T10:30:00+08:00",
+            duration_minutes=60,
+        ).status_code
+        == 200
+    )
+    assert patch(second_order, "team", assistant_ids=[str(assistant.id)]).status_code == 200
+    assert patch(second_order, "schedule", scheduled_start=None).json()["scheduled_start"] is None
+
+    price = {"hourly_rate": "200", "materials_estimate": "75"}
+    assert patch(first_order, "price", **price).json()["price_estimate"]["amount"] == "675.00"
+    assert patch(first_order, "price", **price, override="650").status_code == 422
+    quote = patch(first_order, "price", **price, override="650", reason="Approved discount")
+    assert quote.json()["price_estimate"]["amount"] == "650.00"
+    assert quote.json()["price_estimate"]["suggested"] == "675.00"
+
+    assistant_auth = auth(assistant)
+    assert client.get(first, headers=assistant_auth).json()["work_orders"][0]["id"] == first_id
+    assert "work_schedule_changed" in {
+        item["action"]
+        for item in client.get("/api/notifications", headers=assistant_auth).json()["items"]
+    }
+    assert client.post(f"{first_order}/start", headers=assistant_auth).status_code == 403
+    assert client.post(f"{first_order}/start", headers=auth(lead)).status_code == 200
+    log = client.post(
+        f"{first_order}/logs",
+        headers=assistant_auth,
+        json={"action": "Replaced seal", "notes": "Checked for leaks after replacement."},
+    )
+    assert log.status_code == 201
+    assert log.json()["recorded_by_name"] == "Assistant"
+    actual = {"labor_cost": "280", "materials_cost": "70"}
+    assert (
+        client.post(f"{first_order}/complete", headers=assistant_auth, json=actual).status_code
+        == 403
+    )
+    assert (
+        client.post(f"{first_order}/complete", headers=auth(lead), json=actual).status_code == 200
+    )
+    assert patch(first_order, "price", **price).status_code == 409
+    review = client.post(f"{first}/verify", headers=admin, json={"work_order_id": first_id})
+    assert review.status_code == 200
+    assert review.json()["status"] == "closed"
 
 
 def test_dashboard_counts_match_branch_scoped_queues(client, account, people):
@@ -291,6 +571,84 @@ def test_validation_and_role_rules(client, account, people):
     )
 
 
+def test_technician_specialization_management_and_assignment(client, db, account, people):
+    branch, outside, manager, _, _, technician = people
+    admin = auth(account)
+    db.add(ServiceCategory(id="plumbing", name="Plumbing"))
+    db.commit()
+
+    payload = {
+        "full_name": "Avery Technician",
+        "email": "avery@example.com",
+        "password": "technician-password",
+        "role": "technician",
+        "branch_ids": [str(branch.id)],
+        "specialization": "plumbing",
+    }
+    response = client.post("/api/admin/users", headers=admin, json=payload)
+    assert response.status_code == 201
+    assert response.json()["specialization"] == "plumbing"
+    specialist_id = response.json()["id"]
+    specialist_path = f"/api/admin/users/{specialist_id}/specialization"
+    assert (
+        client.patch(specialist_path, headers=admin, json={"specialization": "unknown"}).status_code
+        == 422
+    )
+    assert (
+        client.patch(
+            specialist_path, headers=auth(manager), json={"specialization": None}
+        ).status_code
+        == 403
+    )
+    assert (
+        client.patch(
+            f"/api/admin/users/{manager.id}/specialization",
+            headers=admin,
+            json={"specialization": "plumbing"},
+        ).status_code
+        == 422
+    )
+
+    technician.specialization = "Plumbing"
+    db.commit()
+    request = client.post("/api/requests", headers=auth(manager), json=report(branch.id)).json()
+    path = f"/api/requests/{request['id']}"
+    assert (
+        client.patch(
+            f"{path}/category", headers=admin, json={"category_id": "plumbing"}
+        ).status_code
+        == 200
+    )
+
+    def options():
+        return client.get(path, headers=admin).json()["eligible_technicians"]
+
+    assert [option["id"] for option in options()] == [specialist_id, str(technician.id)]
+    assert all(
+        option["matches_category"] and option["specialization"] == "Plumbing"
+        for option in options()
+    )
+    cleared = client.patch(specialist_path, headers=admin, json={"specialization": None})
+    assert cleared.status_code == 200
+    assert cleared.json()["specialization"] is None
+    assert [option["id"] for option in options()] == [str(technician.id), specialist_id]
+
+    db.add(BranchAccess(user_id=uuid.UUID(specialist_id), branch_id=outside.id))
+    db.commit()
+    assert (
+        client.patch(
+            specialist_path, headers=admin, json={"specialization": "plumbing"}
+        ).status_code
+        == 404
+    )
+    assert (
+        client.post(
+            f"{path}/work-orders", headers=admin, json={"technician_id": specialist_id}
+        ).status_code
+        == 201
+    )
+
+
 def test_initial_work_order_assignment(client, db, account, people):
     branch, outside, branch_manager, _, outsider, technician = people
     outside_tech = User(
@@ -311,7 +669,12 @@ def test_initial_work_order_assignment(client, db, account, people):
     admin = auth(account)
     payload = {"technician_id": str(technician.id)}
     assert client.get(path, headers=admin).json()["eligible_technicians"] == [
-        {"id": str(technician.id), "full_name": technician.full_name}
+        {
+            "id": str(technician.id),
+            "full_name": technician.full_name,
+            "specialization": None,
+            "matches_category": False,
+        }
     ]
     assert client.get(path, headers=auth(branch_manager)).json()["eligible_technicians"] is None
     assert client.post(assignment, headers=auth(branch_manager), json=payload).status_code == 403
@@ -344,7 +707,12 @@ def test_initial_work_order_assignment(client, db, account, people):
     assert client.get(path, headers=auth(outside_tech)).status_code == 404
     detail = client.get(path, headers=admin).json()
     assert detail["eligible_technicians"] == [
-        {"id": str(technician.id), "full_name": technician.full_name}
+        {
+            "id": str(technician.id),
+            "full_name": technician.full_name,
+            "specialization": None,
+            "matches_category": False,
+        }
     ]
     assert detail["status"] == "submitted"
     assigned = [event for event in detail["events"] if event["action"] == "work_order_assigned"]

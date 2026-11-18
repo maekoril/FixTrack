@@ -262,6 +262,12 @@ form { margin-top: 20px; }
   margin-bottom: 20px;
 }
 .request-filters > div { min-width: 0; }
+.work-planning { margin-block: 12px; }
+.work-planning summary { cursor: pointer; font-weight: 700; padding-block: 8px; }
+.work-planning form { margin-top: 8px; }
+.request-filters.request-filters-with-category {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 9.5rem), 1fr));
+}
 .request-filters input, .request-filters select { margin: 0; }
 .request-filters select, #priority { text-transform: capitalize; }
 .search-field { display: block; position: relative; }

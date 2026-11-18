@@ -11,6 +11,8 @@ const messages: Record<string, string> = {
   priority_changed: 'Priority updated',
   work_order_assigned: 'Work assigned to you',
   work_reassigned: 'Work transferred to you',
+  work_team_changed: 'Work order team updated',
+  work_schedule_changed: 'Work schedule updated',
   work_started: 'Repair started',
   maintenance_logged: 'Maintenance update added',
   work_completed: 'Repair awaiting verification',

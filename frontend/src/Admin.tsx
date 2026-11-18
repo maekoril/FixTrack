@@ -2,20 +2,24 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { Icon } from './Icon';
 
 type Branch = { id: string; name: string; location: string };
+type ServiceCategory = { id: string; name: string };
 type ManagedUser = { id: string; full_name: string; email: string; role: string;
-  is_active: boolean; branch_ids: string[] };
+  is_active: boolean; branch_ids: string[]; specialization: string | null };
 type Props = { token: string; branches: Branch[]; refreshBranches: () => Promise<void>;
   onExpired: () => void };
 
 export function Admin({ token, branches, refreshBranches, onExpired }: Props) {
   const [users, setUsers] = useState<ManagedUser[]>([]);
+  const [categories, setCategories] = useState<ServiceCategory[] | null>(null);
+  const [categoryError, setCategoryError] = useState('');
+  const [newRole, setNewRole] = useState('branch_manager');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
 
   async function api(path: string, method = 'GET', body?: unknown) {
-    const response = await fetch(`/api/admin${path}`, { method,
+    const response = await fetch(`/api${path}`, { method,
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     if (response.status === 401) { onExpired(); throw new Error('Your session expired. Sign in again.'); }
@@ -26,12 +30,16 @@ export function Admin({ token, branches, refreshBranches, onExpired }: Props) {
     return response.json();
   }
 
-  async function loadUsers() { setUsers(await api('/users')); }
+  async function loadUsers() { setUsers(await api('/admin/users')); }
   useEffect(() => {
     let active = true;
-    api('/users').then(data => { if (active) setUsers(data); })
+    api('/admin/users').then(data => { if (active) setUsers(data); })
       .catch(err => { if (active) setError(err.message); })
       .finally(() => { if (active) setLoading(false); });
+    api('/requests/categories').then(data => { if (active) setCategories(data); })
+      .catch(() => {
+        if (active) setCategoryError('Unable to load specializations. Reload this page to try again.');
+      });
     return () => { active = false; };
   }, [token]);
 
@@ -46,7 +54,7 @@ export function Admin({ token, branches, refreshBranches, onExpired }: Props) {
   function createBranch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); const form = event.currentTarget; const data = new FormData(form);
     void mutate(async () => {
-      await api('/branches', 'POST', { name: data.get('name'), location: data.get('location') });
+      await api('/admin/branches', 'POST', { name: data.get('name'), location: data.get('location') });
       await refreshBranches(); form.reset();
     }, 'Branch created. You now have access to it.');
   }
@@ -54,9 +62,10 @@ export function Admin({ token, branches, refreshBranches, onExpired }: Props) {
   function createUser(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); const form = event.currentTarget; const data = new FormData(form);
     void mutate(async () => {
-      await api('/users', 'POST', { full_name: data.get('full_name'), email: data.get('email'),
-        password: data.get('password'), role: data.get('role'), branch_ids: data.getAll('branch_ids') });
-      form.reset(); await loadUsers();
+      await api('/admin/users', 'POST', { full_name: data.get('full_name'), email: data.get('email'),
+        password: data.get('password'), role: data.get('role'), branch_ids: data.getAll('branch_ids'),
+        specialization: data.get('specialization') || null });
+      form.reset(); setNewRole('branch_manager'); await loadUsers();
     }, 'Account created. Share the credentials privately with the teammate.');
   }
 
@@ -65,6 +74,7 @@ export function Admin({ token, branches, refreshBranches, onExpired }: Props) {
       <h1 id="admin-title">People &amp; branches</h1>
       <p className="muted">Create branch records and manage who can access them.</p></div></div>
     {error && <p className="error" role="alert">{error}</p>}
+    {categoryError && <p className="error" role="alert">{categoryError}</p>}
     {notice && <p className="success" role="status">{notice}</p>}
     <div className="admin-grid">
       <section className="card"><div className="panel-heading"><span className="icon-tile"><Icon name="branch" /></span><div><h2>Create a branch</h2><p className="muted">Add a location to your workspace.</p></div></div><form onSubmit={createBranch}>
@@ -81,8 +91,11 @@ export function Admin({ token, branches, refreshBranches, onExpired }: Props) {
           <label htmlFor="new-password">Password</label>
           <input id="new-password" name="password" type="password" autoComplete="new-password" minLength={12} maxLength={128} required aria-describedby="password-hint" />
           <p className="field-hint" id="password-hint">Use at least 12 characters.</p>
-          <label htmlFor="new-role">Role</label><select id="new-role" name="role">
+          <label htmlFor="new-role">Role</label><select id="new-role" name="role" value={newRole}
+            onChange={event => setNewRole(event.target.value)}>
             <option value="branch_manager">Branch Manager</option><option value="technician">Technician</option></select>
+          {newRole === 'technician' && categories &&
+            <SpecializationSelect id="new-specialization" categories={categories} />}
           <BranchChecks branches={branches} />
           <p className="note">Select at least one branch.</p>
           <button>Create account</button>
@@ -98,19 +111,47 @@ export function Admin({ token, branches, refreshBranches, onExpired }: Props) {
           <form onSubmit={event => {
             event.preventDefault(); const data = new FormData(event.currentTarget);
             void mutate(async () => {
-              await api(`/users/${user.id}/branches`, 'PUT', { branch_ids: data.getAll('branch_ids') });
+              await api(`/admin/users/${user.id}/branches`, 'PUT', { branch_ids: data.getAll('branch_ids') });
               await loadUsers();
             }, 'Branch access updated.');
           }}><fieldset disabled={busy}><BranchChecks branches={branches} selected={user.branch_ids} />
             <div className="actions"><button className="secondary">Save access</button>
               <button type="button" className="secondary" onClick={() => void mutate(async () => {
-                await api(`/users/${user.id}/active`, 'PATCH', { is_active: !user.is_active });
+                await api(`/admin/users/${user.id}/active`, 'PATCH', { is_active: !user.is_active });
                 await loadUsers();
               }, user.is_active ? 'Account disabled.' : 'Account enabled.')}>{user.is_active ? 'Disable account' : 'Enable account'}</button>
             </div></fieldset></form>
+          {user.role === 'technician' && categories && <form onSubmit={event => {
+            event.preventDefault();
+            const specialization = new FormData(event.currentTarget).get('specialization') || null;
+            void mutate(async () => {
+              const updated: ManagedUser = await api(`/admin/users/${user.id}/specialization`, 'PATCH', { specialization });
+              setUsers(previous => previous.map(item => item.id === updated.id ? updated : item));
+            }, 'Specialization saved.');
+          }}>
+            <fieldset disabled={busy}>
+              <SpecializationSelect key={user.specialization ?? ''} id={`specialization-${user.id}`}
+                categories={categories} current={user.specialization} />
+              <button className="secondary">Save specialization</button>
+            </fieldset>
+          </form>}
         </article>)}
     </section>
   </section>;
+}
+
+function SpecializationSelect({ id, categories, current = null }: {
+  id: string; categories: ServiceCategory[]; current?: string | null;
+}) {
+  return <>
+    <label htmlFor={id}>Specialization</label>
+    <select id={id} name="specialization" defaultValue={current ?? ''}>
+      <option value="">No specialization</option>
+      {current && !categories.some(category => category.id === current) &&
+        <option value={current}>{current}</option>}
+      {categories.map(category => <option key={category.id} value={category.id}>{category.name}</option>)}
+    </select>
+  </>;
 }
 
 function BranchChecks({ branches, selected = [] }: { branches: Branch[]; selected?: string[] }) {

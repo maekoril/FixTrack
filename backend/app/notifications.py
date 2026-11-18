@@ -1,13 +1,13 @@
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import String, cast, func, select
+from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models import NotificationRead, RequestEvent, Role, ServiceRequest, User, WorkOrder
-from app.requests import visible
+from app.requests import assigned_to, visible
 from app.security import current_user
 
 router = APIRouter(prefix="/api/notifications", tags=["Notifications"])
@@ -21,8 +21,15 @@ EVENTS = {
         "work_completed",
         "work_returned",
         "verified_and_closed",
+        "work_schedule_changed",
     ),
-    Role.technician: ("work_order_assigned", "work_reassigned", "work_returned"),
+    Role.technician: (
+        "work_order_assigned",
+        "work_reassigned",
+        "work_returned",
+        "work_team_changed",
+        "work_schedule_changed",
+    ),
 }
 
 
@@ -42,11 +49,15 @@ def inbox(user: User, db: Session):
     )
     if user.role == Role.technician:
         query = query.where(
-            RequestEvent.details["technician_id"].as_string() == str(user.id),
             select(WorkOrder.id)
             .where(
                 WorkOrder.request_id == RequestEvent.request_id,
-                WorkOrder.technician_id == user.id,
+                assigned_to(user.id),
+                or_(
+                    RequestEvent.details["technician_id"].as_string() == str(user.id),
+                    WorkOrder.technician_id != user.id,
+                    RequestEvent.action.in_(("work_team_changed", "work_schedule_changed")),
+                ),
                 func.replace(RequestEvent.details["work_order_id"].as_string(), "-", "")
                 == func.replace(cast(WorkOrder.id, String), "-", ""),
             )

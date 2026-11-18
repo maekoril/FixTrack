@@ -19,7 +19,7 @@ from sqlalchemy import (
     Uuid,
     func,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
 
@@ -42,6 +42,12 @@ class Priority(str, enum.Enum):
     medium = "medium"
     high = "high"
     urgent = "urgent"
+
+
+class Difficulty(str, enum.Enum):
+    easy = "easy"
+    moderate = "moderate"
+    hard = "hard"
 
 
 class WorkStatus(str, enum.Enum):
@@ -87,14 +93,29 @@ class Asset(Record, Base):
     location: Mapped[str] = mapped_column(String(255), default="", server_default="")
 
 
+class ServiceCategory(Base):
+    __tablename__ = "service_categories"
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True)
+
+
 class ServiceRequest(Record, Base):
     __tablename__ = "service_requests"
     __table_args__ = (
         ForeignKeyConstraint(["asset_id", "branch_id"], ["assets.id", "assets.branch_id"]),
+        CheckConstraint(
+            "duration_override_minutes BETWEEN 1 AND 10080", name="request_duration_minutes_range"
+        ),
     )
     branch_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("branches.id"), index=True)
     submitted_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
     asset_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
+    category_id: Mapped[str | None] = mapped_column(ForeignKey("service_categories.id"), index=True)
+    category: Mapped[ServiceCategory | None] = relationship()
+    difficulty: Mapped[Difficulty | None] = mapped_column(
+        Enum(Difficulty, native_enum=False, create_constraint=True)
+    )
+    duration_override_minutes: Mapped[int | None]
     title: Mapped[str] = mapped_column(String(180))
     description: Mapped[str] = mapped_column(Text)
     location: Mapped[str] = mapped_column(String(255))
@@ -114,6 +135,12 @@ class WorkOrder(Record, Base):
     __table_args__ = (
         CheckConstraint("labor_cost >= 0", name="positive_labor_cost"),
         CheckConstraint("materials_cost >= 0", name="positive_materials_cost"),
+        CheckConstraint(
+            "(scheduled_start IS NULL AND scheduled_end IS NULL) OR "
+            "(scheduled_start IS NOT NULL AND scheduled_end IS NOT NULL "
+            "AND scheduled_end > scheduled_start)",
+            name="valid_work_order_schedule",
+        ),
     )
     request_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("service_requests.id"), index=True)
     technician_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
@@ -123,6 +150,21 @@ class WorkOrder(Record, Base):
     )
     labor_cost: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
     materials_cost: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    scheduled_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    scheduled_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    price_estimate: Mapped[dict | None] = mapped_column(JSON(none_as_null=True))
+    lead: Mapped[User] = relationship(foreign_keys=[technician_id])
+    assistants: Mapped[list[User]] = relationship(
+        secondary="work_order_assistants", order_by=(User.full_name, User.id)
+    )
+
+
+class WorkOrderAssistant(Base):
+    __tablename__ = "work_order_assistants"
+    work_order_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("work_orders.id"), primary_key=True)
+    technician_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id"), primary_key=True, index=True
+    )
 
 
 class MaintenanceLog(Record, Base):

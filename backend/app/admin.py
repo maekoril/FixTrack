@@ -9,11 +9,14 @@ from sqlalchemy.orm import Session
 from typing_extensions import Annotated
 
 from app.db import get_db
-from app.models import Branch, BranchAccess, Role, User
+from app.models import Branch, BranchAccess, Role, ServiceCategory, User
 from app.security import current_user, password_hash
 
 router = APIRouter(prefix="/api/admin", tags=["Administration"])
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=150)]
+Specialization = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=150)
+]
 
 
 def administrator(user: User = Depends(current_user)) -> User:
@@ -42,6 +45,7 @@ class UserInput(BaseModel):
     password: str = Field(min_length=12, max_length=128)
     role: Literal["branch_manager", "technician"]
     branch_ids: list[uuid.UUID] = Field(min_length=1)
+    specialization: Specialization | None = None
 
 
 class AccessInput(BaseModel):
@@ -52,12 +56,17 @@ class ActiveInput(BaseModel):
     is_active: bool
 
 
+class SpecializationInput(BaseModel):
+    specialization: Specialization | None
+
+
 class UserOutput(BaseModel):
     id: uuid.UUID
     full_name: str
     email: str
     role: Role
     is_active: bool
+    specialization: str | None
     branch_ids: list[uuid.UUID]
 
 
@@ -68,6 +77,7 @@ def output(db: Session, user: User) -> UserOutput:
         email=user.email,
         role=user.role,
         is_active=user.is_active,
+        specialization=user.specialization if user.role == Role.technician else None,
         branch_ids=sorted(branch_ids(db, user.id)),
     )
 
@@ -78,13 +88,22 @@ def validate_access(ids: list[uuid.UUID], scope: set[uuid.UUID]):
 
 
 def managed_user(db: Session, actor: User, user_id: uuid.UUID) -> User:
-    target = db.get(User, user_id)
+    target = db.get(User, user_id, with_for_update=True)
     if target is None or target.role == Role.administrator:
         raise HTTPException(404, "Managed user not found")
     grants = branch_ids(db, target.id)
     if not grants or not grants <= branch_ids(db, actor.id):
         raise HTTPException(404, "Managed user not found")
     return target
+
+
+def validate_specialization(role: Role, specialization: str | None, db: Session):
+    if specialization is None:
+        return
+    if role != Role.technician:
+        raise HTTPException(422, "Only technicians can have a specialization")
+    if db.get(ServiceCategory, specialization) is None:
+        raise HTTPException(422, "Select a valid service category for the specialization")
 
 
 def commit(db: Session):
@@ -130,10 +149,13 @@ def create_user(
     data: UserInput, actor: User = Depends(administrator), db: Session = Depends(get_db)
 ):
     validate_access(data.branch_ids, branch_ids(db, actor.id))
+    role = Role(data.role)
+    validate_specialization(role, data.specialization, db)
     user = User(
         full_name=data.full_name,
         email=str(data.email).lower(),
-        role=Role(data.role),
+        role=role,
+        specialization=data.specialization,
         password_hash=password_hash.hash(data.password),
     )
     db.add(user)
@@ -183,5 +205,22 @@ def update_active(
 ):
     user = managed_user(db, actor, user_id)
     user.is_active = data.is_active
+    commit(db)
+    return output(db, user)
+
+
+@router.patch("/users/{user_id}/specialization", response_model=UserOutput)
+def update_specialization(
+    user_id: uuid.UUID,
+    data: SpecializationInput,
+    actor: User = Depends(administrator),
+    db: Session = Depends(get_db),
+):
+    user = managed_user(db, actor, user_id)
+    if user.role != Role.technician:
+        raise HTTPException(422, "Only technicians can have a specialization")
+    if data.specialization != user.specialization:
+        validate_specialization(user.role, data.specialization, db)
+        user.specialization = data.specialization
     commit(db)
     return output(db, user)
