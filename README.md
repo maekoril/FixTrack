@@ -3,9 +3,14 @@
 A multi-branch maintenance and service request system for reporting issues, assigning repairs,
 recording actions and costs, and verifying resolution.
 
-**Status:** authentication, administrator account/branch controls, employee service requests,
-branch-scoped request review, priority changes, and activity history are implemented.
-Work-order assignment, repair progress/costs, closure, and photo uploads are upcoming.
+Start with the [FixTrack Master Context](documentation/MASTER_CONTEXT.md) for product scope,
+role and branch rules, implementation status, and the roadmap.
+
+**Status:** authentication, administrator account/branch controls, branch manager service requests,
+branch-scoped request review, priority changes, initial work-order assignment, starting repairs,
+maintenance logs, costs, technician completion, administrator verification and closure,
+and private photo uploads are implemented. Administrators can manage the asset registry and
+review asset repair history and recorded costs.
 
 ## Repository layout
 
@@ -46,11 +51,11 @@ Copy-Item .env.example .env
 ```
 
 Paste the generated value into `JWT_SECRET` in `backend/.env`, replacing the placeholder.
-Then apply migrations and create your first administrator (password is prompted privately):
+Run the generator again and add the new value as `SETUP_TOKEN` in the same file.
+Apply migrations and start the API:
 
 ```powershell
 .venv\Scripts\python -m alembic upgrade head
-.venv\Scripts\python -m app.bootstrap --email admin@example.com --name "Project Admin" --branch "Head Office" --location "Laguna"
 .venv\Scripts\python -m uvicorn app.main:app --reload --host 127.0.0.1
 ```
 
@@ -62,24 +67,60 @@ npm ci
 npm run dev
 ```
 
-Visit [FixTrack](http://localhost:5173) and sign in with the account you created.
+Open [First administrator setup](http://localhost:5173/#setup), enter your `SETUP_TOKEN`,
+and create the account and its initial branch. Then sign in with the new account.
+Browser setup closes once an administrator exists. Remove `SETUP_TOKEN` from `backend/.env`
+and restart the API after setup. The `python -m app.bootstrap` CLI remains available for
+provisioning additional administrators.
 The Vite development server proxies `/api` to FastAPI. API documentation is at
 [Swagger UI](http://127.0.0.1:8000/docs). Run backend commands from `backend/` so `.env` is found.
 On macOS/Linux, use `.venv/bin/python` in place of `.venv\Scripts\python`.
 
 ## Try the request workflow
 
+Administrators can open **Dashboard** to see branch-scoped workload counts. Select a count to
+open its matching queue. The branch filter carries over to the queue.
+
+Open **Reports** to compare verified closures, completed work orders, and labor and materials
+costs by branch. The selected UTC dates include both the start and end day.
+
 1. Sign in as an administrator and open **People & branches**.
-2. Create an employee account with access to one of your branches.
-3. Sign out and sign in as that employee. Select **Report an issue**, fill in its title,
+2. Create a Branch Manager account with access to one or more of your branches.
+3. Sign out and sign in as that branch manager. Select **Report an issue**, fill in its title,
    description, and location, then submit it. A registered asset is optional.
 4. Sign in as the administrator again. Open the request under **Service requests** and set
-   its priority. The employee can see the update in the request's activity history.
+   its priority. The branch manager can see the update in the request's activity history.
+5. On the request detail page, select an active technician with access to the branch and choose
+   **Assign technician**. Sign in as that technician and open **Assigned requests** to see it.
+6. Open the assigned request and choose **Start work**. Both the work order and the request
+   move to **In progress**, and the request history records who started the work.
+7. Add maintenance entries for diagnosis, progress, and repairs. Enter labor and materials costs
+   and choose **Complete work**. The request moves to **Awaiting verification**. Administrators
+   can review the logs and costs in the request details.
+8. As an administrator, open the request and choose **Verify and close**, or enter a reason,
+   select a technician, and choose **Return for follow-up**. The technician can start and
+   complete the new work order, then the administrator can review it again.
 
-Employees see their own requests within their current branch access. Administrators see all
+Branch managers see their own requests within their current branch access. Administrators see all
 requests in their branches. Technicians see requests linked to their assigned work orders;
-assignment tools will arrive in the next milestone. Requests remain `submitted` after triage
-until a work order starts the repair workflow. Photos are not supported in this milestone.
+their branch access still applies. A submitted request can receive one initial work order.
+It stays `submitted` after assignment and the work order starts as `assigned`.
+
+To hand off active work, open the work order as an administrator, select a replacement
+technician, enter a reason, and choose **Reassign technician**.
+
+Open **Notifications** in the header to see new activity for your role. Opening an alert
+marks it read and takes you to the request. The inbox, queue, and open request refresh
+every five seconds while the tab is visible.
+
+Branch managers can attach an issue photo when reporting or add one to their open request.
+Technicians can add repair photos to an in-progress work order. Open a thumbnail in the
+request details to see the larger photo. Uploads support still JPEG, PNG, and WebP files
+up to 8 MB and 24 megapixels, with up to 20 photos per request.
+
+For an existing database, run `alembic upgrade head` before starting the updated API.
+The migration converts employee accounts to branch managers and preserves their branch grants,
+credentials, and request history.
 
 ## Checks and migrations
 

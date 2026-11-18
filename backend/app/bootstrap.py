@@ -7,8 +7,8 @@ from pydantic import EmailStr, TypeAdapter
 from sqlalchemy import select
 
 from app.db import SessionLocal
-from app.models import Branch, BranchAccess, Role, User
-from app.security import password_hash
+from app.models import User
+from app.setup import lock_admin_provisioning, provision_admin
 
 
 def main():
@@ -23,22 +23,17 @@ def main():
     if len(password) < 12 or password != getpass("Confirm password: "):
         parser.error("Passwords must match and contain at least 12 characters")
     with SessionLocal.begin() as db:
+        lock_admin_provisioning(db)
         if db.scalar(select(User).where(User.email == email)):
             parser.error("That email already exists; no changes made")
-        branch = db.scalar(select(Branch).where(Branch.name == args.branch))
-        if branch is None:
-            branch = Branch(name=args.branch, location=args.location)
-            db.add(branch)
-            db.flush()
-        user = User(
+        provision_admin(
+            db,
             email=email,
             full_name=args.name,
-            role=Role.administrator,
-            password_hash=password_hash.hash(password),
+            branch_name=args.branch,
+            location=args.location,
+            password=password,
         )
-        db.add(user)
-        db.flush()
-        db.add(BranchAccess(user_id=user.id, branch_id=branch.id))
     print("Administrator created.")
 
 
