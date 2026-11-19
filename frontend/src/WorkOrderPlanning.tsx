@@ -1,7 +1,7 @@
 import { formatDateTime, formatMoney as money } from './format';
 import { useState, type FormEvent } from 'react';
 import { AIEstimateHelper, type EstimateSuggestion } from './AIEstimateHelper';
-import { priceInputsChanged } from './planning';
+import { matchesSpecialization, priceInputsChanged } from './planning';
 
 type Technician = { id: string; full_name: string };
 export type TechnicianOption = Technician & { specialization: string | null; matches_category: boolean };
@@ -146,7 +146,7 @@ export function RequestSetup({ request, order, canAssign, categories, options, b
   const suggested = difficulty ? request.setup_duration_suggestions?.[category]?.[difficulty] : undefined;
   const categoryName = categories?.find(option => option.id === category)?.name;
   const available = options.map(option => ({
-    ...option, matches_category: !!categoryName && option.specialization === categoryName,
+    ...option, matches_category: matchesSpecialization(option.specialization, categoryName),
   })).sort((left, right) => Number(right.matches_category) - Number(left.matches_category));
   const unavailable = [savedOrder?.lead, ...(savedOrder?.assistants ?? [])]
     .filter((member): member is Technician => !!member && !available.some(option => option.id === member.id));

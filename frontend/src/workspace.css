@@ -452,15 +452,39 @@ button.urgent-row:hover:not(:disabled) { background: var(--danger-soft); }
 
 .material-item, .budget-review { margin-block: 16px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; min-width: 0; }
 .materials-editor { min-width: 0; }
+.materials-editor > .field-hint { margin-block: var(--space-3); }
 .material-breakdown { padding-inline-start: 20px; overflow-wrap: anywhere; }
 .material-breakdown li { margin-block: 12px; }
 .material-breakdown small { display: block; }
-.ai-estimate-helper { margin-block: 16px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; min-width: 0; }
-.ai-estimate-helper h4 { margin-top: 0; }
-.ai-suggestion { overflow-wrap: anywhere; }
-.ai-suggestion h5 { font-size: 1rem; margin-block: 16px 8px; }
-.ai-suggestion ul { padding-inline-start: 20px; }
-.ai-suggestion li { margin-block: 8px; }
+.ai-estimate-helper { margin-block: 16px; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); min-width: 0; background: var(--canvas); }
+.ai-estimate-header, .ai-estimate-heading { display: flex; align-items: center; gap: 12px; }
+.ai-estimate-header { justify-content: space-between; flex-wrap: wrap; }
+.ai-estimate-heading { min-width: 0; }
+.ai-estimate-helper h4 { margin: 0; font-size: 1rem; }
+.ai-estimate-helper .field-hint { margin: 0; }
+.ai-estimate-helper button, .ai-estimate-details > summary { min-height: 44px; }
+.ai-estimate-disclosure { padding-top: 12px; }
+.ai-estimate-details { border-top: 1px solid var(--line); }
+.ai-estimate-details > summary { padding-block: 12px; cursor: pointer; font-weight: 600; overflow-wrap: anywhere; }
+.ai-estimate-details > summary:hover { color: var(--accent-hover); }
+.ai-estimate-details > p, .ai-estimate-details > ul, .ai-estimate-details > ol { padding-bottom: 12px; }
+.ai-data-details { border-top: 0; color: var(--muted); }
+.ai-data-details > summary { font-weight: 400; }
+.ai-detail-count { display: inline-block; margin-inline-start: 6px; padding-inline: 6px; border-radius: 4px; background: var(--accent-soft); color: var(--accent-hover); font-size: .85rem; font-variant-numeric: tabular-nums; }
+.ai-estimate-status { display: block; padding-block: 8px; }
+.ai-suggestion { overflow-wrap: anywhere; border-top: 1px solid var(--line); }
+.ai-plan-summary { padding-block: 16px; }
+.ai-estimate-duration { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 12px; margin-bottom: 8px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface); }
+.ai-estimate-duration strong { display: block; font-size: 1.5rem; font-variant-numeric: tabular-nums; }
+.ai-estimate-duration + p { padding-bottom: 16px; }
+.ai-suggestion ul, .ai-suggestion ol { padding-inline-start: 20px; margin: 0; }
+.ai-suggestion li + li { margin-top: 8px; }
+.ai-suggestion .ai-material-list { list-style: none; padding-inline-start: 0; }
+.ai-material-list li > div { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 16px; }
+.ai-material-list li > div > span { color: var(--muted); font-variant-numeric: tabular-nums; }
+.ai-material-actions { display: grid; justify-items: start; gap: 8px; padding-bottom: 16px; }
+.ai-review-needed > summary { color: var(--amber-text); }
+.ai-estimate-helper .ai-estimate-footer { padding-top: 12px; border-top: 1px solid var(--line); }
 .intake-safety { border: 1px solid #b33832; border-inline-start-width: 4px; border-radius: 10px; background: #fff2ed; color: #762923; padding: 14px; margin-block: 16px; }
 .intake-safety p { margin-block: 8px 0; }
 .intake-photo-preview { display: block; width: min(100%, 420px); max-height: 300px; object-fit: contain; border: 1px solid var(--line); border-radius: 10px; margin-block: 12px; }

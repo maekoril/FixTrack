@@ -1,4 +1,8 @@
 type MaterialFields = { name: string; quantity: string; unit_price: string; source: string };
+
+export function matchesSpecialization(specialization: string | null, category: string | undefined) {
+  return !!category && specialization?.trim().toLowerCase() === category.trim().toLowerCase();
+}
 type Quote = { hourly_rate: string; materials_estimate: string; materials_items?: MaterialFields[] | null;
   override: string | null; reason: string };
 

@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { priceInputsChanged, setupSavedMessage } from './planning.ts';
+import { matchesSpecialization, priceInputsChanged, setupSavedMessage } from './planning.ts';
+
+test('technician category matches preserve legacy capitalization and spacing', () => {
+  assert.equal(matchesSpecialization(' plumbing ', 'Plumbing'), true);
+  assert.equal(matchesSpecialization('PLUMBING', 'Plumbing'), true);
+  assert.equal(matchesSpecialization('Electrical', 'Plumbing'), false);
+  assert.equal(matchesSpecialization(null, 'Plumbing'), false);
+  assert.equal(matchesSpecialization('Plumbing', undefined), false);
+});
 
 const items = [{ name:'Tape', quantity:'2', unit_price:'25.00', source:'Supplier quote' }];
 const quote = { hourly_rate:'250.00', materials_estimate:'50.00', materials_items:items,

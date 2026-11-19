@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
+import { Icon } from './Icon';
 
 export type SuggestedMaterial = { name: string; quantity: string; unit: string; notes: string };
 export type EstimateSuggestion = {
@@ -18,53 +19,83 @@ export function AIEstimateHelper({ onGenerate, onMaterials, onDuration, legacyMa
   const [error, setError] = useState('');
   const [addedMaterials, setAddedMaterials] = useState(false);
   const [usedDuration, setUsedDuration] = useState(false);
+  const titleId = useId();
 
   async function generate() {
     if (loading) return;
-    setLoading(true); setError(''); setSuggestion(null);
-    setAddedMaterials(false); setUsedDuration(false);
-    try { setSuggestion(await onGenerate()); }
+    setLoading(true); setError('');
+    try {
+      setSuggestion(await onGenerate());
+      setAddedMaterials(false); setUsedDuration(false);
+    }
     catch (err) { setError(err instanceof Error ? err.message : 'Unable to generate suggestions.'); }
     finally { setLoading(false); }
   }
 
-  return <section className="ai-estimate-helper" aria-labelledby="ai-estimate-title" aria-busy={loading}>
-    <h4 id="ai-estimate-title">AI estimate assistant</h4>
-    <p className="field-hint">Generate repair tasks, material quantities, and a service duration from the saved issue and maintenance notes.
-      Save any changes to the request before generating.</p>
-    <p className="field-hint">Generating sends the issue details, equipment name and condition, category, difficulty, and recent maintenance notes to Groq.
-      Photos and account details are excluded. Suggestions need your review and verified prices.</p>
-    <button type="button" className="secondary" disabled={loading} onClick={() => void generate()}>
-      {loading ? 'Generating suggestions…' : 'Generate AI suggestions'}
-    </button>
-    <span role="status" className="field-hint">{loading ? 'Preparing a repair plan. You can continue estimating manually.' : ''}</span>
+  return <section className="ai-estimate-helper" aria-labelledby={titleId}>
+    <header className="ai-estimate-header">
+      <div className="ai-estimate-heading"><span className="icon-tile"><Icon name="tool" size={18} /></span>
+        <div><h4 id={titleId}>AI estimate assistant</h4><p className="field-hint">A starting point for your estimate.</p></div>
+      </div>
+      <button type="button" className="secondary" disabled={loading} onClick={() => void generate()}>
+        {loading ? <span className="spinner" aria-hidden="true" /> : <Icon name="refresh" size={16} />}
+        {loading ? 'Generating…' : suggestion ? 'Regenerate' : 'Generate plan'}
+      </button>
+    </header>
+    <p className="field-hint ai-estimate-disclosure">Uses saved details via Groq. Review before saving.</p>
+    <details className="ai-estimate-details ai-data-details">
+      <summary>What gets shared?</summary>
+      <p className="field-hint">Groq receives the saved issue, equipment name and condition, category, difficulty, and recent maintenance notes.
+        Free text is sent as entered; photos and account details are excluded. Save request changes before generating.</p>
+    </details>
+    <span role="status" className={loading ? 'field-hint ai-estimate-status' : 'sr-only'}>
+      {loading ? 'Preparing a plan. You can continue estimating manually.'
+        : suggestion ? 'Plan ready for review. Changes apply only when you save setup.' : ''}
+    </span>
     {error && <p role="alert" className="error">{error}</p>}
     {suggestion && <div className="ai-suggestion">
-      <p><strong>Suggested plan:</strong> {suggestion.summary}</p>
-      {!!suggestion.tasks.length && <><h5>Repair tasks</h5><ul>{suggestion.tasks.map((task, index) => <li key={index}>{task}</li>)}</ul></>}
-      {suggestion.duration_minutes !== null ? <>
-        <p><strong>Suggested service duration:</strong> {suggestion.duration_minutes} minutes per technician.</p>
-        <button type="button" className="secondary" disabled={usedDuration} onClick={() => {
+      <p className="ai-plan-summary">{suggestion.summary}</p>
+      <div className="ai-estimate-duration">
+        <div><span className="field-hint">Service duration</span>
+          <strong>{suggestion.duration_minutes !== null ? suggestion.duration_minutes + ' min' : 'Needs more info'}</strong>
+        </div>
+        {suggestion.duration_minutes !== null && <button type="button" className="secondary" disabled={usedDuration || loading} onClick={() => {
           onDuration(suggestion.duration_minutes!); setUsedDuration(true);
-        }}>{usedDuration ? 'Duration added to form' : 'Use suggested service duration'}</button>
-        <p className="field-hint">Review and save the form to apply. An existing scheduled slot keeps its saved duration.</p>
-      </> : <p>More information is needed to suggest a service duration.</p>}
+        }}>{usedDuration ? <><Icon name="check" size={16} />Added to form</> : 'Use duration'}</button>}
+      </div>
+      <p className="field-hint">Existing scheduled slots stay fixed.</p>
       {!!suggestion.materials.length && <>
-        <h5>Proposed materials</h5>
-        <ul>{suggestion.materials.map((item, index) => <li key={index}>
-          <strong>{item.name}</strong> · {item.quantity} {item.unit}<p className="field-hint">{item.notes}</p>
-        </li>)}</ul>
-        <button type="button" className="secondary" disabled={addedMaterials || !canAddMaterials} onClick={() => {
-          if (onMaterials(suggestion.materials)) setAddedMaterials(true);
-        }}>{addedMaterials ? 'Materials added to form' : legacyMaterialsTotal !== undefined
-          ? 'Replace materials total with proposed items' : 'Add proposed materials to estimate'}</button>
-        <p className="field-hint">{legacyMaterialsTotal !== undefined
-          ? `Replaces the existing materials total of ₱${legacyMaterialsTotal} in this form. Enter verified prices and sources for the new items before saving.`
-          : 'Adds new lines with empty prices and sources for you to complete. Check for duplicates before saving.'}</p>
-        {!canAddMaterials && <p className="field-hint">Select a lead technician in the form to add materials to a work-order estimate.</p>}
+        <details className="ai-estimate-details">
+          <summary>Proposed materials <span className="ai-detail-count">{suggestion.materials.length}</span></summary>
+          <ul className="ai-material-list">{suggestion.materials.map((item, index) => <li key={index}>
+            <div><strong>{item.name}</strong><span>{item.quantity} {item.unit}</span></div>
+            {item.notes && <p className="field-hint">{item.notes}</p>}
+          </li>)}</ul>
+        </details>
+        <div className="ai-material-actions">
+          <button type="button" className="secondary" disabled={addedMaterials || !canAddMaterials || loading} onClick={() => {
+            if (onMaterials(suggestion.materials)) setAddedMaterials(true);
+          }}>{addedMaterials ? 'Materials added to form' : legacyMaterialsTotal !== undefined
+            ? 'Replace materials total with items' : 'Add materials to form'}</button>
+          <p className="field-hint">{legacyMaterialsTotal !== undefined
+            ? 'Replaces ₱' + legacyMaterialsTotal + '. Add verified unit prices and sources before saving.'
+            : 'Check for duplicates; add verified unit prices and sources.'}</p>
+          {!canAddMaterials && <p className="field-hint">Select a lead technician to add materials.</p>}
+        </div>
       </>}
-      {!!suggestion.assumptions.length && <><h5>Assumptions to confirm</h5><ul>{suggestion.assumptions.map((item, index) => <li key={index}>{item}</li>)}</ul></>}
-      {!!suggestion.missing_information.length && <><h5>Information needed</h5><ul>{suggestion.missing_information.map((item, index) => <li key={index}>{item}</li>)}</ul></>}
+      {!!suggestion.missing_information.length && <details className="ai-estimate-details ai-review-needed">
+        <summary>Information needed <span className="ai-detail-count">{suggestion.missing_information.length}</span></summary>
+        <ul>{suggestion.missing_information.map((item, index) => <li key={index}>{item}</li>)}</ul>
+      </details>}
+      {!!suggestion.tasks.length && <details className="ai-estimate-details">
+        <summary>Repair tasks <span className="ai-detail-count">{suggestion.tasks.length}</span></summary>
+        <ol>{suggestion.tasks.map((task, index) => <li key={index}>{task}</li>)}</ol>
+      </details>}
+      {!!suggestion.assumptions.length && <details className="ai-estimate-details">
+        <summary>Assumptions to confirm <span className="ai-detail-count">{suggestion.assumptions.length}</span></summary>
+        <ul>{suggestion.assumptions.map((item, index) => <li key={index}>{item}</li>)}</ul>
+      </details>}
+      <p className="field-hint ai-estimate-footer">Draft only · Save setup to apply · Budget approval is separate</p>
     </div>}
   </section>;
 }

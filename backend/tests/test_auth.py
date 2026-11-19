@@ -12,6 +12,23 @@ def test_health(client):
     assert client.get("/api/health").json() == {"status": "ok"}
 
 
+def test_account_deletion_preflight_allows_configured_origin_only(client):
+    headers = {
+        "Origin": "http://localhost:5173",
+        "Access-Control-Request-Method": "DELETE",
+        "Access-Control-Request-Headers": "Authorization",
+    }
+    response = client.options("/api/admin/users/unused", headers=headers)
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == headers["Origin"]
+    assert "DELETE" in response.headers["access-control-allow-methods"]
+    rejected = client.options(
+        "/api/admin/users/unused", headers=headers | {"Origin": "https://untrusted.example"}
+    )
+    assert rejected.status_code == 400
+    assert "access-control-allow-origin" not in rejected.headers
+
+
 def test_login_and_profile(client, account):
     response = client.post(
         "/api/auth/login", json={"email": "ADMIN@example.com", "password": "correct-password"}

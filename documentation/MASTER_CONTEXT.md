@@ -16,6 +16,9 @@ The original November 2026 proposal was prepared for Laguna State Polytechnic Un
 
 ## Workflow and scope
 
+See [Lifecycle and debugging guide](SYSTEM_LIFECYCLE.md) for the full role handoffs, review
+findings, validation coverage, and current policy gaps.
+
 **Available today.** An administrator creates a Branch Manager account under **People & branches** and grants it one or more branches. The branch manager opens **Report an issue** and submits the branch, title, description, and location. A registered asset in the same branch is optional, so general facility concerns can be submitted independently. The request starts as `submitted`; current intake confirms category and priority, while legacy API submissions can leave them unset. In **Service requests**, the administrator reviews it and chooses `low`, `medium`, `high`, or `urgent`. The branch manager can see that change in the activity history. Triage leaves the request status at `submitted`.
 
 **Service categories.** During triage, administrators can set, change, or clear a category on an open request in a branch they can access. New and existing requests without a category display **Uncategorized**. The shared list includes Electrical, Plumbing, Air Conditioning & Ventilation, IT & Network, Equipment Repair, Building & Facilities, Carpentry, Civil & Structural, Pest Control, Cleaning & Sanitation, and Other. Users can see the category in requests they can access, and administrators can filter the queue by category or **Uncategorized**. Category changes appear in the request history and commit in the same transaction as the update. The category belongs to the request and applies to its initial and follow-up work orders.
@@ -103,6 +106,11 @@ mode. The same local schema validation applies before returning a suggestion. Mo
 credential, and other errors are not retried. Provider messages and failed generations are not
 forwarded to clients or logs; only HTTP status and recognized error codes are logged.
 Receipt extraction and AI evidence review remain future work.
+
+The estimate assistant uses a compact summary and duration card with explicit copy actions.
+Material details, repair tasks, assumptions, missing information, and the full data-transfer
+disclosure expand on demand. Failed regeneration preserves the previous plan and its copied
+state, so a provider error does not discard usable suggestions or re-enable duplicate imports.
 
 **Repair lifecycle.** The administrator reviews the latest completed work order and can verify and close the request with optional notes. Returning the repair requires instructions and an active technician in the request's branch. The request moves back to `in_progress` and a new assigned work order is created in the same transaction. Completed orders retain their logs and costs. Branch managers can follow the decision in the request history.
 

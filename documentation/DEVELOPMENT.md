@@ -172,6 +172,10 @@ the updated API. The existing administrator estimate assistant is separate and u
 
 ### Deployment hardening
 
+CORS permits GET, POST, PUT, PATCH, and DELETE for configured origins. DELETE is required
+for the administrator account-deletion endpoint when using a separate frontend origin;
+unconfigured origins remain blocked. A preflight regression covers both cases.
+
 This is a development foundation. Add login throttling, a reviewed session/logout and password
 recovery policy, deployment secrets, HTTPS/reverse proxy configuration, attachment validation,
 backups, and operational monitoring before a public deployment. A client sign-out currently
