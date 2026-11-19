@@ -130,6 +130,40 @@ class ServiceRequest(Record, Base):
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class RequestIntake(Record, Base):
+    __tablename__ = "request_intakes"
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    branch_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("branches.id"))
+    request_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("service_requests.id"), unique=True
+    )
+    original_description: Mapped[str] = mapped_column(Text)
+    normalized_description: Mapped[str] = mapped_column(Text)
+    language_detected: Mapped[str] = mapped_column(String(10))
+    ai_category: Mapped[str | None] = mapped_column(String(50))
+    ai_subcategory: Mapped[str | None] = mapped_column(String(180))
+    ai_priority: Mapped[str | None] = mapped_column(String(10))
+    ai_priority_reason: Mapped[str | None] = mapped_column(Text)
+    ai_safety_flags: Mapped[list] = mapped_column(JSON, default=list)
+    ai_confidence: Mapped[Decimal | None] = mapped_column(Numeric(4, 3))
+    photo_analysis: Mapped[dict | None] = mapped_column(JSON(none_as_null=True))
+    final_category: Mapped[str | None] = mapped_column(String(50))
+    final_priority: Mapped[str | None] = mapped_column(String(10))
+    ai_overridden: Mapped[bool] = mapped_column(Boolean, default=False)
+    ai_raw_response: Mapped[dict | None] = mapped_column(JSON(none_as_null=True))
+    conversation: Mapped[list] = mapped_column(JSON, default=list)
+    incomplete_info: Mapped[bool] = mapped_column(Boolean, default=False)
+    needs_more_info: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class IntakeAttempt(Record, Base):
+    __tablename__ = "intake_attempts"
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    prompt_tokens: Mapped[int] = mapped_column(default=0)
+    completion_tokens: Mapped[int] = mapped_column(default=0)
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+
+
 class WorkOrder(Record, Base):
     __tablename__ = "work_orders"
     __table_args__ = (
@@ -153,6 +187,8 @@ class WorkOrder(Record, Base):
     scheduled_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     scheduled_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     price_estimate: Mapped[dict | None] = mapped_column(JSON(none_as_null=True))
+    approved_price: Mapped[dict | None] = mapped_column(JSON(none_as_null=True))
+    overrun_reason: Mapped[str | None] = mapped_column(Text)
     lead: Mapped[User] = relationship(foreign_keys=[technician_id])
     assistants: Mapped[list[User]] = relationship(
         secondary="work_order_assistants", order_by=(User.full_name, User.id)

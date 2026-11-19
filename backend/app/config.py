@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,6 +12,11 @@ class Settings(BaseSettings):
     setup_token: str | None = Field(default=None, min_length=32)
     cors_origins: list[str] = ["http://localhost:5173"]
     access_token_minutes: int = Field(default=30, ge=1, le=1440)
+    groq_api_key: SecretStr | None = None
+    groq_model: str = Field(default="openai/gpt-oss-20b", min_length=1, max_length=100)
+    ai_timeout_seconds: int = Field(default=30, ge=5, le=60)
+    groq_vision_model: str = Field(default="qwen/qwen3.8-27b", min_length=1, max_length=100)
+    triage_requests_per_minute: int = Field(default=5, ge=1, le=60)
 
     @field_validator("jwt_secret")
     @classmethod

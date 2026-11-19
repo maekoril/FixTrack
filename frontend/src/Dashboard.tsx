@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Icon } from './Icon';
+import { Chip, EmptyState, PageHeader, Skeleton } from './UI';
 import { pollWhileVisible } from './liveUpdates';
 
 export const queues = {
   needs_assignment: { label: 'Needs assignment', icon: 'people', description: 'Submitted without a work order' },
   urgent_open: { label: 'Urgent open requests', icon: 'requests', description: 'Urgent requests across active stages' },
   work_in_progress: { label: 'Work in progress', icon: 'tool', description: 'Repairs technicians have started' },
-  awaiting_verification: { label: 'Awaiting verification', icon: 'check', description: 'Completed repairs ready for review' },
+  awaiting_verification: { label: 'Repairs awaiting verification', icon: 'check', description: 'Completed repairs ready for review' },
 } as const;
 export type QueueFocus = keyof typeof queues;
 const queueKeys = Object.keys(queues) as QueueFocus[];
@@ -59,9 +60,7 @@ export function Dashboard({ token, branches, onExpired, onRequest }: {
   }, [token, branch, paused]);
 
   return <section className="dashboard-area" aria-labelledby="dashboard-title">
-    <div className="section-heading">
-      <div><p className="eyebrow">Maintenance overview</p><h1 id="dashboard-title">Operations, in focus.</h1>
-        <p className="muted">Track the work. Resolve what matters.</p></div>
+    <PageHeader id="dashboard-title" title="Overview" description="Monitor repair activity across your branches.">
       <div className="dashboard-branch">
         <label htmlFor="dashboard-branch">Branch</label>
         <select id="dashboard-branch" value={branch} onChange={event => {
@@ -71,49 +70,60 @@ export function Dashboard({ token, branches, onExpired, onRequest }: {
           {branches.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
         </select>
       </div>
-    </div>
+    </PageHeader>
     {error && <p className="error" role="alert">{error}</p>}
-    {!counts && !error && <p role="status">Loading dashboard counts…</p>}
-    <div className="overview-stage">
-      <section className="review-spotlight">
-        <div className="spotlight-heading"><span className="eyebrow">Ready for your review</span><Icon name="check" size={28} /></div>
-        <div className="spotlight-value"><strong key={counts?.awaiting_verification}>{counts?.awaiting_verification ?? '–'}</strong>
-          <h2>Repairs awaiting<br />verification.</h2></div>
-        <p>Review the technician’s work, inspect the photos, and decide the next step.</p>
-        <a className="spotlight-link" href={queueLink('awaiting_verification')}>Review completed work <Icon name="arrow" /></a>
-      </section>
-    <div className="dashboard-grid">
-      {queueKeys.filter(key => key !== 'awaiting_verification').map(key => {
-        const queue = queues[key];
-        const query = new URLSearchParams({ focus: key });
-        if (branch) query.set('branch_id', branch);
-        return <a className={`card dashboard-card dashboard-${key}`} key={key} href={`#requests?${query}`}>
-          <div className="dashboard-card-icons"><span className="icon-tile"><Icon name={queue.icon} /></span><Icon name="arrow" size={18} /></div>
-          <h2>{queue.label}</h2>
-          <strong className="dashboard-count" key={counts?.[key]}>{counts?.[key] ?? '–'}</strong>
-          <p className="muted">{queue.description}</p>
-        </a>;
-      })}
-    </div>
+    <div className="card dashboard-grid" aria-label="Repair queues">
+      {queueKeys.map(key => <StatCard key={key} queueKey={key} href={queueLink(key)} count={counts?.[key]} />)}
     </div>
     <div className="update-status">
-      <span>{error ? 'Updates interrupted' : updated ? `Updated ${updated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Connecting…'}</span>
+      <span>{error ? 'Updates interrupted' : updated ? `Updated ${updated.toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit' })}` : 'Connecting…'}</span>
       <button className="text-button" aria-pressed={paused} onClick={() => setPaused(!paused)}>{paused ? 'Resume updates' : 'Pause updates'}</button>
     </div>
     <div className="dashboard-bottom">
       <section className="urgent-panel card">
-        <div className="queue-heading"><div><p className="eyebrow">Priority watch</p><h2>Urgent requests</h2></div>
-          <a className="text-link" href={queueLink('urgent_open')}>View all <Icon name="arrow" size={16} /></a></div>
-        {counts && !urgent.length && <div className="empty-state"><span className="icon-tile"><Icon name="check" /></span><h3>No urgent requests</h3><p>No open requests are marked urgent in this branch view.</p></div>}
+        <div className="queue-heading"><h2>Urgent requests</h2>
+          <a className="text-link" href={queueLink('urgent_open')}>View queue <Icon name="arrow" size={16} /></a></div>
+        {!counts && !error && <Skeleton label="Loading urgent requests…" />}
+        {counts && !urgent.length && <EmptyState icon="check" title="No urgent requests for this branch view." />}
         {urgent.map(request => <button className="urgent-row" key={request.id} onClick={() => onRequest(request.id)}>
           <span className="urgent-marker" aria-hidden="true" />
           <span><strong>{request.title}</strong><small>{request.branch_name}</small></span>
-          <span className="badge">{request.status.replaceAll('_', ' ')}</span><Icon name="arrow" size={18} />
+          <Chip tone={`status-${request.status}`}>{request.status.replaceAll('_', ' ')}</Chip><Icon name="arrow" size={16} />
         </button>)}
       </section>
-      <a className="asset-shortcut card" href="#assets"><span className="icon-tile"><Icon name="asset" size={28} /></span>
-        <p className="eyebrow">Asset intelligence</p><h2>The story behind<br />every repair.</h2><p>Equipment records, service history, and repair costs in one place.</p>
-        <span className="shortcut-action">Explore the registry <Icon name="arrow" size={18} /></span></a>
+      <a className="asset-shortcut card" href="#assets"><span className="icon-tile"><Icon name="asset" /></span>
+        <div><h2>Asset registry</h2><p className="muted">Equipment, repair history, and costs</p></div>
+        <Icon name="arrow" size={18} />
+      </a>
     </div>
   </section>;
+}
+
+function StatCard({ queueKey, href, count }: { queueKey: QueueFocus; href: string; count?: number }) {
+  const queue = queues[queueKey];
+  const [display, setDisplay] = useState<number>();
+  useEffect(() => {
+    const motion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    if (!count || motion.matches) { setDisplay(count); return; }
+    let frame: number;
+    const start = performance.now();
+    function update(now: number) {
+      const fraction = Math.min((now - start) / 320, 1);
+      setDisplay(Math.round(count! * (1 - (1 - fraction) ** 3)));
+      if (fraction < 1) frame = requestAnimationFrame(update);
+    }
+    const finish = () => { cancelAnimationFrame(frame); setDisplay(count); };
+    frame = requestAnimationFrame(update);
+    motion.addEventListener('change', finish);
+    return () => { cancelAnimationFrame(frame); motion.removeEventListener('change', finish); };
+  }, [count]);
+
+  return <a className={`dashboard-card dashboard-${queueKey}`} href={href} title={queue.description}>
+    <span className="icon-tile"><Icon name={queue.icon} size={18} /></span>
+    <div><h2>{queue.label}</h2><strong className="dashboard-count">
+      <span aria-hidden="true">{count === undefined ? '–' : display ?? 0}</span>
+      <span className="sr-only">{count ?? 'Loading'}</span>
+    </strong></div>
+    <Icon name="arrow" size={16} />
+  </a>;
 }

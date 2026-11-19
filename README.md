@@ -76,6 +76,61 @@ The Vite development server proxies `/api` to FastAPI. API documentation is at
 [Swagger UI](http://127.0.0.1:8000/docs). Run backend commands from `backend/` so `.env` is found.
 On macOS/Linux, use `.venv/bin/python` in place of `.venv\Scripts\python`.
 
+## AI request intake
+
+**Report an issue** accepts English, Tagalog, and Taglish. Select **Review with AI**
+before creating a ticket. Review the English summary, editable category/priority,
+photo observations, and safety flags. Vague reports get at most three questions per
+round and two rounds; unresolved uncertainty is saved as **Incomplete info**.
+**Continue manually** is always available before analysis, and provider failures
+return to manual category/priority selection. Submission remains a separate confirmation.
+
+Intake uses the same backend Groq key as estimates. Optional settings:
+
+```dotenv
+GROQ_VISION_MODEL=qwen/qwen3.8-27b
+TRIAGE_REQUESTS_PER_MINUTE=5
+```
+
+Text uses `GROQ_MODEL`; only photo reports use `GROQ_VISION_MODEL`. Intake calls use
+a fixed 15-second timeout and at most two attempts. Photos must be still JPEG/PNG/WebP,
+at most 5 MB and 24 megapixels; the provider receives a metadata-free JPEG no larger
+than 1024 pixels per side. Recognized emails, Philippine mobile numbers, and explicit
+name introductions are redacted from text. Avoid other private details and people in photos.
+
+Apply `alembic upgrade head` after updating. Original and normalized text, AI suggestions,
+confirmed values, overrides, follow-up answers, and usage counts are saved separately.
+Technicians see normalized text with an original-text toggle. Safety alerts use the
+existing scoped inbox and its five-second polling. Branch managers can revise their
+own reports' category/priority; administrators can revise reports within their grants.
+
+See [intake development notes](documentation/DEVELOPMENT.md#ai-request-intake)
+for the endpoint contract, category mapping, and sample inputs.
+
+## Optional AI estimate assistant
+
+To enable AI suggestions, create an API key in your
+[Groq project](https://console.groq.com/keys) and add it only to `backend/.env`:
+
+```dotenv
+GROQ_API_KEY=your-groq-api-key
+GROQ_MODEL=openai/gpt-oss-20b
+AI_TIMEOUT_SECONDS=30
+```
+
+Restart the backend after changing configuration. Groq offers a free plan with
+[model-specific rate limits](https://console.groq.com/docs/rate-limits). Check your
+Groq account for availability and limits. OpenAI API keys are not used by this integration.
+The default model is hosted by Groq despite the `openai/` prefix in its model ID.
+Never put the key in the frontend, give it a `VITE_` prefix, or commit it.
+
+As an administrator, open an active request's **Request setup**, save your request changes,
+and select **Generate AI suggestions**. Review the proposed tasks, duration, materials,
+assumptions, and missing information. Copy suggestions into the form using the explicit
+buttons, enter supplier prices and sources, and save. Budget approval remains a separate action.
+Generating sends saved issue/equipment details and recent maintenance notes to Groq;
+the form describes the fields sent. No photos are sent. Manual estimates work without a key.
+
 ## Try the request workflow
 
 Administrators can open **Dashboard** to see branch-scoped workload counts. Select a count to

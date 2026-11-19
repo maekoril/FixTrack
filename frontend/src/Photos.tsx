@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Icon } from './Icon';
 
 export const photoTypes = 'image/jpeg,image/png,image/webp';
 export type Photo = { id: string; original_name: string; work_order_id: string | null };
@@ -70,7 +71,8 @@ function PhotoTile({ token, path, photo }: { token: string; path: string; photo:
     <button type="button" className="secondary" disabled={loading} onClick={() => void view()} aria-label={`View ${photo.original_name}`}>
       {thumbnail ? <img src={thumbnail} alt="" /> : 'View photo'}
     </button>
-    <figcaption>{photo.work_order_id ? 'Repair photo' : 'Issue photo'} · {photo.original_name}</figcaption>
+    <figcaption><span>{photo.work_order_id ? 'Repair photo' : 'Issue photo'}</span>
+      <span className="photo-filename" title={photo.original_name}>{photo.original_name}</span></figcaption>
     {error && <small role="status">{error}</small>}
     {full && <dialog ref={dialog} className="photo-dialog" aria-label={photo.original_name} onClose={() => setFull('')}>
       <button type="button" className="secondary photo-close" onClick={() => dialog.current?.close()}>
@@ -81,11 +83,54 @@ function PhotoTile({ token, path, photo }: { token: string; path: string; photo:
   </figure>;
 }
 
-export function PhotoGallery({ token, requestId, photos }: { token: string; requestId: string; photos: Photo[] }) {
-  if (!photos.length) return null;
-  return <section aria-label="Request photos">
+export function PhotoGallery({ token, requestId, photos, busy = false, onAdd }: {
+  token: string; requestId: string; photos: Photo[]; busy?: boolean; onAdd?: (file: File) => Promise<void>;
+}) {
+  const [uploading, setUploading] = useState(false);
+  const [pickerError, setPickerError] = useState('');
+
+  async function choosePhoto() {
+    if (!onAdd || busy || uploading) return;
+    setPickerError('');
+    const browser = window as Window & {
+      showOpenFilePicker?: (options: {
+        multiple: boolean;
+        types: { description: string; accept: Record<string, string[]> }[];
+      }) => Promise<FileSystemFileHandle[]>;
+    };
+    if (!browser.showOpenFilePicker) {
+      setPickerError('To add photos, open this page in Chrome or Edge on a computer.');
+      return;
+    }
+    try {
+      const [handle] = await browser.showOpenFilePicker({
+        multiple: false,
+        types: [{ description: 'Issue photos', accept: {
+          'image/jpeg': ['.jpg', '.jpeg'], 'image/png': ['.png'], 'image/webp': ['.webp'],
+        } }],
+      });
+      if (!handle) return;
+      const file = await handle.getFile();
+      setUploading(true);
+      await onAdd(file);
+    } catch (err) {
+      if (!(err instanceof DOMException && err.name === 'AbortError')) {
+        setPickerError(err instanceof Error ? err.message : 'Unable to open the photo picker.');
+      }
+    } finally { setUploading(false); }
+  }
+
+  if (!photos.length && !onAdd) return null;
+  return <section className="request-photos" aria-label="Request photos">
     <h3>Photos</h3>
     <div className="photo-grid">{photos.map(photo => <PhotoTile key={photo.id} token={token}
-      photo={photo} path={`/api/requests/${requestId}/photos/${photo.id}`} />)}</div>
+      photo={photo} path={`/api/requests/${requestId}/photos/${photo.id}`} />)}
+      {onAdd && <div className="photo-tile">
+        <button type="button" className="secondary photo-add" disabled={busy || uploading} aria-label={uploading ? 'Uploading photo' : 'Add issue photo'}
+          title="Add issue photo" onClick={() => void choosePhoto()}><Icon name="plus" size={28} /></button>
+        <p className="photo-add-caption" role="status">{uploading ? 'Uploading…' : 'Add photo'}</p>
+      </div>}
+    </div>
+    {pickerError && <p className="error" role="alert">{pickerError}</p>}
   </section>;
 }

@@ -93,6 +93,85 @@ while visible and refreshes when the tab becomes visible again.
 
 ## Before production
 
+### Budget estimation and review
+
+Admin setup saves return `setup_missing` computed from the committed request and current active
+work order. Clients distinguish successful partial saves from complete planning and render the
+remaining field names. `frontend/src/planning.ts` compares canonical price inputs, excluding saved
+line subtotals and formatting differences, so unchanged itemized quotes do not cause a price write
+on an unrelated save. This permits partial planning edits even when a new duration is not yet set.
+Run `npm test` in `frontend/` for these save/price regressions, in addition to the backend suite.
+
+Work-order estimates support `materials_items` (up to 100) alongside the legacy
+`materials_estimate` input. When itemized input is provided, the server calculates
+materials from quantity × unit price, rounds each line half-up to cents, and sums
+the rounded amounts. Labor uses the existing duration × team size × hourly rate.
+Each changed estimate increments a version in `price_estimate`; legacy estimates
+without a version are version 0. Administrators approve the displayed version via
+`POST /api/requests/{request_id}/work-orders/{order_id}/price/approve`.
+
+`work_orders.approved_price` stores a separate immutable-in-application snapshot
+of the most recent approval. Draft edits do not mutate it. Reapproval replaces
+the current snapshot and appends both the old and new snapshots to a request
+event. Request and work-order locks serialize estimate approval and completion.
+Completion requires an `overrun_reason` when actual labor plus materials exceeds
+the approved amount. Older orders without approvals can still complete. Reports
+continue to use actual recorded costs, and repair verification remains an explicit
+administrator action. Apply migration `d92b34f81a06` before running the updated API.
+
+### AI estimate suggestions
+
+`app/ai.py` exposes administrator-only `POST /api/requests/{id}/ai/estimate`.
+Current request access and active planning state are checked before a provider call.
+The existing HTTPX dependency calls Groq's Chat Completions API with strict JSON schema,
+low reasoning effort, a 4,096-token completion cap,
+and configurable per-operation HTTP timeouts (30 seconds by default).
+`GROQ_API_KEY` is a backend-only `SecretStr`; `GROQ_MODEL` defaults to `openai/gpt-oss-20b`
+and must support Groq's strict structured output and low reasoning effort. The model is
+hosted by Groq; the `openai/` model ID prefix does not route requests to OpenAI.
+The fixed endpoint is `https://api.groq.com/openai/v1/chat/completions`. System/user
+messages carry instructions and request data. Only a stopped completion with valid JSON
+content is accepted; truncated completions, refusals, and malformed choices are rejected.
+Legacy OpenAI configuration is ignored; keys are never forwarded between providers.
+Groq can intermittently reject strict JSON generation with HTTP 400 and code
+`json_validate_failed` or `structured_generation_failed`. For these two errors only,
+the server makes one fallback call using JSON-object mode with the schema in the
+system prompt. Local Pydantic validation remains mandatory. This caps generation at
+two calls; credentials, quota, model, timeout, and other errors are not retried.
+Logs contain only HTTP status and allowlisted error codes, excluding raw messages,
+failed generations, issue content, and keys. Model/configuration and generation
+failures produce distinct actionable messages in the UI.
+
+Only saved issue title/description, category, difficulty, optional asset name/condition,
+and ten recent maintenance action/notes pairs are assembled for the provider. Each
+note is capped at 2,000 characters. Free text may contain whatever users entered;
+there is no automatic personal-data redaction. No photos, account identifiers, branch
+names, or location fields are added. The UI discloses the transfer before generation.
+Responses are validated locally and never written to budgets or request events.
+Provider errors and invalid or incomplete results return generic actionable errors
+without forwarding raw provider payloads or credentials.
+
+The assistant proposes tasks, duration, material names/quantities/units, assumptions,
+and missing information. Its schema excludes monetary fields. Administrators choose
+whether to use the duration or add materials; imported material lines require prices
+and sources. Approval and completion remain the existing deterministic workflows.
+Suggestions are not persisted and there is no cross-request historical price retrieval,
+receipt parsing, image analysis, or automatic work verification in this integration.
+Tests replace HTTPX transport, so the suite makes no paid provider calls.
+
+Official API references: [quickstart](https://console.groq.com/docs/quickstart),
+[structured outputs](https://console.groq.com/docs/structured-outputs).
+
+## AI request intake
+
+The intake implementation is documented in [AI intake](AI_INTAKE.md), including the JSON/multipart
+contract, two-round Q&A, original/normalized descriptions, human confirmation, category mapping,
+photo privacy, per-user rate limits, provider fallback, migrations, and test instructions.
+Apply migration `e40d51a6b902` and install the pinned `python-multipart` dependency before running
+the updated API. The existing administrator estimate assistant is separate and unchanged.
+
+### Deployment hardening
+
 This is a development foundation. Add login throttling, a reviewed session/logout and password
 recovery policy, deployment secrets, HTTPS/reverse proxy configuration, attachment validation,
 backups, and operational monitoring before a public deployment. A client sign-out currently

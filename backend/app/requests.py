@@ -5,7 +5,14 @@ from enum import StrEnum
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import AwareDatetime, BaseModel, Field, StringConstraints, field_serializer
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    Field,
+    StringConstraints,
+    field_serializer,
+    model_validator,
+)
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -20,6 +27,7 @@ from app.models import (
     MaintenanceLog,
     Priority,
     RequestEvent,
+    RequestIntake,
     RequestStatus,
     Role,
     ServiceCategory,
@@ -75,10 +83,17 @@ class RequestInput(BaseModel):
     branch_id: uuid.UUID
     asset_id: uuid.UUID | None = None
     title: Annotated[str, StringConstraints(strip_whitespace=True, min_length=3, max_length=180)]
-    description: Annotated[
-        str, StringConstraints(strip_whitespace=True, min_length=10, max_length=10000)
-    ]
+    description: Annotated[str, StringConstraints(min_length=1, max_length=10000)]
     location: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
+    category_id: Annotated[str, StringConstraints(min_length=1, max_length=50)] | None = None
+    priority: Priority | None = None
+    triage_id: uuid.UUID | None = None
+
+    @model_validator(mode="after")
+    def nonblank_description(self):
+        if not self.description.strip():
+            raise ValueError("Describe the issue")
+        return self
 
 
 class CategoryOutput(BaseModel, from_attributes=True):
@@ -104,6 +119,10 @@ class RequestOutput(BaseModel):
     suggested_duration_minutes: int | None
     estimated_duration_minutes: int | None
     status: RequestStatus
+    setup_missing: list[str] | None = None
+    intake: dict | None = None
+    safety_flags: list[str] = Field(default_factory=list)
+    incomplete_info: bool = False
     created_at: datetime
 
 
@@ -175,6 +194,8 @@ class WorkOrderOutput(WorkSchedule):
     lead: TechnicianName
     assistants: list[TechnicianName]
     price_estimate: dict | None
+    approved_price: dict | None
+    overrun_reason: str | None
 
     @field_serializer("labor_cost", "materials_cost", when_used="json")
     def serialize_cost(self, amount: Decimal) -> str:
@@ -198,9 +219,17 @@ class MaintenanceLogOutput(BaseModel):
 Money = Annotated[Decimal, Field(ge=0, le=Decimal("9999999999.99"), decimal_places=2)]
 
 
+class MaterialInput(BaseModel):
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=180)]
+    quantity: Annotated[Decimal, Field(gt=0, le=1000000, decimal_places=3)]
+    unit_price: Money
+    source: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
+
+
 class PriceInput(BaseModel):
     hourly_rate: Money
     materials_estimate: Money = Decimal("0")
+    materials_items: Annotated[list[MaterialInput], Field(max_length=100)] | None = None
     override: Money | None = None
     reason: Annotated[str, StringConstraints(strip_whitespace=True, max_length=10000)] = ""
 
@@ -208,6 +237,11 @@ class PriceInput(BaseModel):
 class CompletionInput(BaseModel):
     labor_cost: Money
     materials_cost: Money
+    overrun_reason: Annotated[str, StringConstraints(strip_whitespace=True, max_length=10000)] = ""
+
+
+class PriceApprovalInput(BaseModel):
+    version: Annotated[int, Field(strict=True, ge=0)]
 
 
 class PhotoOutput(BaseModel, from_attributes=True):
@@ -219,6 +253,7 @@ class PhotoOutput(BaseModel, from_attributes=True):
 class DetailOutput(RequestOutput):
     appointment: WorkSchedule | None
     duration_suggestions: dict[Difficulty, int]
+    setup_duration_suggestions: dict[str, dict[Difficulty, int]] | None = None
     events: list[EventOutput]
     eligible_technicians: list[TechnicianOption] | None = None
     work_orders: list[WorkOrderOutput]
@@ -237,6 +272,21 @@ class CategoryInput(BaseModel):
 class EstimateInput(BaseModel):
     difficulty: Difficulty | None
     duration_override_minutes: Annotated[int, Field(strict=True, ge=1, le=10080)] | None
+
+
+class SetupTeam(AssignmentInput):
+    previous_technician_id: uuid.UUID | None = None
+    reason: Annotated[str, StringConstraints(strip_whitespace=True, max_length=10000)] = ""
+
+
+class RequestSetupInput(BaseModel):
+    priority: Priority | None = None
+    category: CategoryInput | None = None
+    estimate: EstimateInput | None = None
+    work_order_id: uuid.UUID | None = None
+    team: SetupTeam | None = None
+    schedule: ScheduleInput | None = None
+    price: PriceInput | None = None
 
 
 def assigned_to(technician_id: uuid.UUID):
@@ -270,7 +320,31 @@ def suggested_duration(request: ServiceRequest) -> int | None:
     )
 
 
+def setup_missing(request: ServiceRequest, order: WorkOrder | None) -> list[str]:
+    if request.status not in (RequestStatus.submitted, RequestStatus.in_progress):
+        return []
+    return [
+        label
+        for label, missing in (
+            ("Priority", request.priority is None),
+            ("Category", request.category_id is None),
+            ("Difficulty", request.difficulty is None),
+            (
+                "Service duration",
+                request.duration_override_minutes is None and suggested_duration(request) is None,
+            ),
+            ("Lead technician", order is None),
+            ("Schedule", order is None or order.scheduled_start is None),
+            ("Price estimate", order is None or order.price_estimate is None),
+        )
+        if missing
+    ]
+
+
 def output(request: ServiceRequest, db: Session) -> dict:
+    from app.intake import intake_output
+
+    intake = intake_output(request, db)
     asset = db.get(Asset, request.asset_id) if request.asset_id else None
     suggested = suggested_duration(request)
     return {
@@ -283,6 +357,10 @@ def output(request: ServiceRequest, db: Session) -> dict:
             "asset_name",
             "suggested_duration_minutes",
             "estimated_duration_minutes",
+            "setup_missing",
+            "intake",
+            "safety_flags",
+            "incomplete_info",
         }
     } | {
         "branch_name": db.get(Branch, request.branch_id).name,
@@ -290,6 +368,9 @@ def output(request: ServiceRequest, db: Session) -> dict:
         "asset_name": f"{asset.asset_tag} · {asset.name}" if asset else None,
         "suggested_duration_minutes": suggested,
         "estimated_duration_minutes": request.duration_override_minutes or suggested,
+        "intake": intake,
+        "safety_flags": intake["ai_safety_flags"] if intake else [],
+        "incomplete_info": intake["incomplete_info"] if intake else False,
     }
 
 
@@ -343,9 +424,26 @@ def submit(data: RequestInput, user: User = Depends(current_user), db: Session =
         asset = db.get(Asset, data.asset_id)
         if asset is None or asset.branch_id != data.branch_id:
             raise HTTPException(422, "Select an asset belonging to this branch")
-    request = ServiceRequest(**data.model_dump(), submitted_by=user.id)
+    if data.category_id is not None and db.get(ServiceCategory, data.category_id) is None:
+        raise HTTPException(422, "Select an available service category")
+    request = ServiceRequest(
+        **(
+            data.model_dump(exclude={"triage_id"})
+            | {
+                "description": data.description.strip(),
+            }
+        ),
+        submitted_by=user.id,
+    )
     db.add(request)
     db.flush()
+    from app.intake import attach_intake
+
+    try:
+        attach_intake(request, data, user, db)
+    except HTTPException:
+        db.rollback()
+        raise
     db.add(
         RequestEvent(
             request_id=request.id,
@@ -366,12 +464,22 @@ def list_requests(
     status: RequestStatus | None = None,
     priority: Priority | None = None,
     category_id: Annotated[str | None, Query(min_length=1, max_length=50)] = None,
+    ai_overridden: bool | None = None,
     focus: QueueFocus | None = None,
     search: str = Query(default="", max_length=180),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=25, ge=1, le=100),
 ):
     query = visible(user, db).options(selectinload(ServiceRequest.category))
+    if ai_overridden is not None:
+        query = query.where(
+            select(RequestIntake.id)
+            .where(
+                RequestIntake.request_id == ServiceRequest.id,
+                RequestIntake.ai_overridden == ai_overridden,
+            )
+            .exists()
+        )
     if focus:
         query = query.where(queue_conditions()[focus])
     if branch_id:
@@ -387,7 +495,22 @@ def list_requests(
     if search.strip():
         query = query.where(ServiceRequest.title.icontains(search.strip(), autoescape=True))
     query = query.order_by(ServiceRequest.created_at.desc(), ServiceRequest.id.desc())
-    return [output(request, db) for request in db.scalars(query.offset(offset).limit(limit))]
+    requests = list(db.scalars(query.offset(offset).limit(limit)))
+    if user.role != Role.administrator or not requests:
+        return [output(request, db) for request in requests]
+    orders = {
+        order.request_id: order
+        for order in db.scalars(
+            select(WorkOrder).where(
+                WorkOrder.request_id.in_([request.id for request in requests]),
+                WorkOrder.status.in_((WorkStatus.assigned, WorkStatus.in_progress)),
+            )
+        )
+    }
+    return [
+        output(request, db) | {"setup_missing": setup_missing(request, orders.get(request.id))}
+        for request in requests
+    ]
 
 
 @router.get("/dashboard", response_model=dict[QueueFocus, int])
@@ -469,6 +592,26 @@ def detail(
         "eligible_technicians": technicians,
         "appointment": appointment if appointment and appointment.scheduled_start else None,
         "duration_suggestions": duration_suggestions(request.category_id),
+        "setup_duration_suggestions": (
+            {category: duration_suggestions(category) for category in SUGGESTED_MINUTES}
+            if technicians is not None
+            else None
+        ),
+        "setup_missing": (
+            setup_missing(
+                request,
+                next(
+                    (
+                        order
+                        for order in reversed(work_orders)
+                        if order.status != WorkStatus.completed
+                    ),
+                    None,
+                ),
+            )
+            if user.role == Role.administrator
+            else None
+        ),
         "work_orders": work_orders,
         "maintenance_logs": maintenance_logs,
         "photos": db.scalars(
@@ -485,7 +628,8 @@ def detail(
                 details=event.details,
             )
             for event, name in events
-            if user.role != Role.branch_manager or event.action != "work_price_changed"
+            if user.role != Role.branch_manager
+            or event.action not in ("work_price_changed", "work_price_approved")
         ],
     }
 
@@ -503,6 +647,15 @@ def assign_work_order(
     if not can_assign(request, db):
         raise HTTPException(409, "Only submitted requests without a work order can be assigned")
     work_order, technician = create_assignment(request, data, user, db)
+    record_assignment(request, work_order, technician, user, db)
+    result = WorkOrderOutput.model_validate(work_order)
+    db.commit()
+    return result
+
+
+def record_assignment(
+    request: ServiceRequest, work_order: WorkOrder, technician: User, user: User, db: Session
+):
     db.add(
         RequestEvent(
             request_id=request.id,
@@ -515,9 +668,6 @@ def assign_work_order(
             },
         )
     )
-    result = WorkOrderOutput.model_validate(work_order)
-    db.commit()
-    return result
 
 
 def create_assignment(
@@ -593,9 +743,7 @@ def editable_work_order(
     return request, order
 
 
-def save_order_change(
-    db: Session, order: WorkOrder, actor: User, action: str, details: dict
-) -> WorkOrderOutput:
+def record_order_change(db: Session, order: WorkOrder, actor: User, action: str, details: dict):
     db.add(
         RequestEvent(
             request_id=order.request_id,
@@ -604,9 +752,6 @@ def save_order_change(
             details={"work_order_id": str(order.id), **details},
         )
     )
-    result = WorkOrderOutput.model_validate(order)
-    db.commit()
-    return result
 
 
 @router.patch("/{request_id}/work-orders/{order_id}/team", response_model=WorkOrderOutput)
@@ -623,11 +768,17 @@ def update_work_team(
         return order
     if order.scheduled_start is not None:
         ensure_schedule_available(db, order, set(team), order.scheduled_start, order.scheduled_end)
+    record_team(order, [team[member_id] for member_id in data.assistant_ids], user, db)
+    db.commit()
+    return order
+
+
+def record_team(order: WorkOrder, assistants: list[User], user: User, db: Session):
+    if {member.id for member in order.assistants} == {member.id for member in assistants}:
+        return
     previous = [member.full_name for member in order.assistants]
-    order.assistants = sorted(
-        (team[member_id] for member_id in data.assistant_ids), key=lambda member: member.full_name
-    )
-    return save_order_change(
+    order.assistants = sorted(assistants, key=lambda member: (member.full_name, member.id))
+    record_order_change(
         db,
         order,
         user,
@@ -649,33 +800,49 @@ def update_work_schedule(
     db: Session = Depends(get_db),
 ):
     request, order = editable_work_order(request_id, order_id, user, db)
-    start = end = None
-    if data.scheduled_start is not None:
-        minutes = (
-            data.duration_minutes
-            or request.duration_override_minutes
-            or suggested_duration(request)
-        )
-        if minutes is None:
-            raise HTTPException(422, "Enter a scheduled duration or save a service estimate first")
-        try:
-            start = as_utc(data.scheduled_start)
-            end = start + timedelta(minutes=minutes)
-        except OverflowError:
-            raise HTTPException(422, "Select a valid schedule date") from None
+    start, end = planned_slot(request, data)
+    if start is not None:
         team = lock_eligible_team(
             request.branch_id, order.technician_id, [member.id for member in order.assistants], db
         )
         ensure_schedule_available(db, order, set(team), start, end)
-    elif data.duration_minutes is not None:
-        raise HTTPException(422, "Select a start time for the duration")
+    if record_schedule(order, start, end, user, db):
+        db.commit()
+    return order
+
+
+def planned_slot(
+    request: ServiceRequest, data: ScheduleInput
+) -> tuple[datetime | None, datetime | None]:
+    if data.scheduled_start is None:
+        if data.duration_minutes is not None:
+            raise HTTPException(422, "Select a start time for the duration")
+        return None, None
+    minutes = (
+        data.duration_minutes or request.duration_override_minutes or suggested_duration(request)
+    )
+    if minutes is None:
+        raise HTTPException(422, "Enter a scheduled duration or save a service estimate first")
+    try:
+        start = as_utc(data.scheduled_start)
+        end = start + timedelta(minutes=minutes)
+    except OverflowError:
+        raise HTTPException(422, "Select a valid schedule date") from None
+    if start < datetime.now(timezone.utc):
+        raise HTTPException(422, "Choose a planned start time in the future")
+    return start, end
+
+
+def record_schedule(
+    order: WorkOrder, start: datetime | None, end: datetime | None, user: User, db: Session
+) -> bool:
     previous = WorkSchedule.model_validate(order).model_dump(mode="json")
     if (start, end) == tuple(
         as_utc(value) if value else None for value in (order.scheduled_start, order.scheduled_end)
     ):
-        return order
+        return False
     order.scheduled_start, order.scheduled_end = start, end
-    return save_order_change(
+    record_order_change(
         db,
         order,
         user,
@@ -685,6 +852,7 @@ def update_work_schedule(
             **WorkSchedule.model_validate(order).model_dump(mode="json"),
         },
     )
+    return True
 
 
 @router.patch("/{request_id}/work-orders/{order_id}/price", response_model=WorkOrderOutput)
@@ -696,6 +864,14 @@ def update_work_price(
     db: Session = Depends(get_db),
 ):
     request, order = editable_work_order(request_id, order_id, user, db)
+    if record_price(request, order, data, user, db):
+        db.commit()
+    return order
+
+
+def record_price(
+    request: ServiceRequest, order: WorkOrder, data: PriceInput, user: User, db: Session
+) -> bool:
     if data.override is not None and not data.reason:
         raise HTTPException(422, "Enter a reason for overriding the suggested price")
     minutes = request.duration_override_minutes or suggested_duration(request)
@@ -707,7 +883,26 @@ def update_work_price(
     labor = (data.hourly_rate * minutes * team_size / 60).quantize(
         Decimal("0.01"), rounding=ROUND_HALF_UP
     )
-    suggested = labor + data.materials_estimate
+    items = None
+    materials = data.materials_estimate
+    if data.materials_items is not None:
+        items = [
+            {
+                "name": item.name,
+                "quantity": str(item.quantity),
+                "unit_price": format(item.unit_price, ".2f"),
+                "source": item.source,
+                "total": format(
+                    (item.quantity * item.unit_price).quantize(
+                        Decimal("0.01"), rounding=ROUND_HALF_UP
+                    ),
+                    ".2f",
+                ),
+            }
+            for item in data.materials_items
+        ]
+        materials = sum((Decimal(item["total"]) for item in items), Decimal("0"))
+    suggested = labor + materials
     if suggested > Decimal("9999999999.99"):
         raise HTTPException(422, "The suggested price exceeds the supported amount")
     amount = data.override if data.override is not None else suggested
@@ -715,19 +910,60 @@ def update_work_price(
         "duration_minutes": minutes,
         "team_size": team_size,
         "hourly_rate": format(data.hourly_rate, ".2f"),
-        "materials_estimate": format(data.materials_estimate, ".2f"),
+        "materials_estimate": format(materials, ".2f"),
+        "materials_items": items,
+        "labor_estimate": format(labor, ".2f"),
         "suggested": format(suggested, ".2f"),
         "amount": format(amount, ".2f"),
         "override": format(data.override, ".2f") if data.override is not None else None,
         "reason": data.reason if data.override is not None else "",
     }
-    if quote == order.price_estimate:
-        return order
     previous = order.price_estimate
+    if previous and quote == {key: value for key, value in previous.items() if key != "version"}:
+        return False
+    quote["version"] = (previous or {}).get("version", 0) + 1
     order.price_estimate = quote
-    return save_order_change(
+    record_order_change(
         db, order, user, "work_price_changed", {"previous_price": previous, "price": quote}
     )
+    return True
+
+
+@router.post("/{request_id}/work-orders/{order_id}/price/approve", response_model=WorkOrderOutput)
+def approve_work_price(
+    request_id: uuid.UUID,
+    order_id: uuid.UUID,
+    data: PriceApprovalInput,
+    user: User = Depends(administrator),
+    db: Session = Depends(get_db),
+):
+    _, order = editable_work_order(request_id, order_id, user, db)
+    quote = order.price_estimate
+    if quote is None:
+        raise HTTPException(409, "Save a price estimate before approving it")
+    if quote.get("version", 0) != data.version:
+        raise HTTPException(
+            409, "The estimate has changed. Review the latest version before approving"
+        )
+    if order.approved_price and order.approved_price["quote"] == quote:
+        return order
+    approval = {
+        "quote": quote,
+        "approved_by": str(user.id),
+        "approved_by_name": user.full_name,
+        "approved_at": datetime.now(timezone.utc).isoformat(),
+    }
+    previous = order.approved_price
+    order.approved_price = approval
+    record_order_change(
+        db,
+        order,
+        user,
+        "work_price_approved",
+        {"previous_approval": previous, "approval": approval},
+    )
+    db.commit()
+    return order
 
 
 @router.post("/{request_id}/work-orders/{work_order_id}/reassign", response_model=WorkOrderOutput)
@@ -769,25 +1005,29 @@ def reassign_work_order(
     technician = team[data.technician_id]
     work_order.lead = technician
     work_order.assistants = [team[assistant_id] for assistant_id in assistant_ids]
-    db.add(
-        RequestEvent(
-            request_id=request.id,
-            actor_id=user.id,
-            action="work_reassigned",
-            details={
-                "work_order_id": str(work_order.id),
-                "previous_technician_id": str(previous.id),
-                "previous_technician_name": previous.full_name,
-                "technician_id": str(technician.id),
-                "technician_name": technician.full_name,
-                "reason": data.reason,
-            },
-        )
-    )
+    record_reassignment(work_order, previous, technician, data.reason, user, db)
     db.flush()
     result = WorkOrderOutput.model_validate(work_order)
     db.commit()
     return result
+
+
+def record_reassignment(
+    order: WorkOrder, previous: User, technician: User, reason: str, actor: User, db: Session
+):
+    record_order_change(
+        db,
+        order,
+        actor,
+        "work_reassigned",
+        {
+            "previous_technician_id": str(previous.id),
+            "previous_technician_name": previous.full_name,
+            "technician_id": str(technician.id),
+            "technician_name": technician.full_name,
+            "reason": reason,
+        },
+    )
 
 
 def request_for_review(
@@ -980,12 +1220,20 @@ def complete_work_order(
         if (work_order.labor_cost, work_order.materials_cost) == (
             data.labor_cost,
             data.materials_cost,
-        ):
+        ) and (work_order.overrun_reason or "") == data.overrun_reason:
             return work_order
         raise HTTPException(409, "This work order has already been completed")
     require_in_progress(request, work_order)
+    if (
+        work_order.approved_price
+        and data.labor_cost + data.materials_cost
+        > Decimal(work_order.approved_price["quote"]["amount"])
+        and not data.overrun_reason
+    ):
+        raise HTTPException(422, "Explain why actual costs exceed the approved estimate")
     work_order.labor_cost = data.labor_cost
     work_order.materials_cost = data.materials_cost
+    work_order.overrun_reason = data.overrun_reason or None
     work_order.status = WorkStatus.completed
     request.status = RequestStatus.awaiting_verification
     db.add(
@@ -1013,9 +1261,18 @@ def set_priority(
         raise HTTPException(404, "Service request not found")
     if request.status == RequestStatus.closed:
         raise HTTPException(409, "Closed requests cannot be reprioritized")
+    apply_priority(request, data, user, db)
+    db.commit()
+    return output(request, db)
+
+
+def apply_priority(request: ServiceRequest, data: PriorityInput, user: User, db: Session):
+    from app.intake import sync_confirmation
+
     if request.priority != data.priority:
         previous = request.priority
         request.priority = data.priority
+        sync_confirmation(request, db)
         db.add(
             RequestEvent(
                 request_id=request.id,
@@ -1024,8 +1281,6 @@ def set_priority(
                 details={"from": previous, "to": data.priority},
             )
         )
-    db.commit()
-    return output(request, db)
 
 
 @router.patch("/{request_id}/category", response_model=RequestOutput)
@@ -1040,12 +1295,21 @@ def set_category(
         raise HTTPException(404, "Service request not found")
     if request.status == RequestStatus.closed:
         raise HTTPException(409, "Closed requests cannot be recategorized")
+    apply_category(request, data, user, db)
+    db.commit()
+    return output(request, db)
+
+
+def apply_category(request: ServiceRequest, data: CategoryInput, user: User, db: Session):
+    from app.intake import sync_confirmation
+
     category = db.get(ServiceCategory, data.category_id) if data.category_id is not None else None
     if data.category_id is not None and category is None:
         raise HTTPException(422, "Select a valid service category")
     if request.category_id != data.category_id:
         previous = request.category
         request.category = category
+        sync_confirmation(request, db)
         db.add(
             RequestEvent(
                 request_id=request.id,
@@ -1057,8 +1321,6 @@ def set_category(
                 },
             )
         )
-    db.commit()
-    return output(request, db)
 
 
 @router.patch("/{request_id}/estimate", response_model=RequestOutput)
@@ -1074,6 +1336,12 @@ def set_estimate(
     if request.status == RequestStatus.closed:
         raise HTTPException(409, "Closed request estimates cannot be changed")
 
+    apply_estimate(request, data, user, db)
+    db.commit()
+    return output(request, db)
+
+
+def apply_estimate(request: ServiceRequest, data: EstimateInput, user: User, db: Session):
     previous = {
         "difficulty": request.difficulty,
         "duration_override_minutes": request.duration_override_minutes,
@@ -1090,5 +1358,91 @@ def set_estimate(
                 details={"previous": previous, "updated": updated},
             )
         )
-    db.commit()
-    return output(request, db)
+
+
+@router.patch("/{request_id}/setup", response_model=RequestOutput)
+def update_request_setup(
+    request_id: uuid.UUID,
+    data: RequestSetupInput,
+    user: User = Depends(administrator),
+    db: Session = Depends(get_db),
+):
+    request = db.scalar(visible(user, db).where(ServiceRequest.id == request_id).with_for_update())
+    if request is None:
+        raise HTTPException(404, "Service request not found")
+    if request.status == RequestStatus.closed:
+        raise HTTPException(409, "Closed requests cannot be edited")
+    try:
+        if data.priority is not None:
+            apply_priority(request, PriorityInput(priority=data.priority), user, db)
+        if data.category is not None:
+            apply_category(request, data.category, user, db)
+        if data.estimate is not None:
+            apply_estimate(request, data.estimate, user, db)
+        if data.team is not None or data.schedule is not None or data.price is not None:
+            db.flush()
+            apply_work_setup(request, data, user, db)
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    active_order = db.scalar(
+        select(WorkOrder)
+        .where(
+            WorkOrder.request_id == request.id,
+            WorkOrder.status.in_((WorkStatus.assigned, WorkStatus.in_progress)),
+        )
+        .order_by(WorkOrder.created_at.desc(), WorkOrder.id.desc())
+        .limit(1)
+    )
+    return output(request, db) | {"setup_missing": setup_missing(request, active_order)}
+
+
+def apply_work_setup(request: ServiceRequest, data: RequestSetupInput, user: User, db: Session):
+    if request.status not in (RequestStatus.submitted, RequestStatus.in_progress):
+        raise HTTPException(409, "Only active requests can be scheduled or assigned")
+    team = data.team
+    if data.work_order_id is None:
+        if team is None:
+            raise HTTPException(422, "Select a lead technician first")
+        if not can_assign(request, db):
+            raise HTTPException(409, "The assignment changed. Refresh the request and try again")
+        order, technician = create_assignment(request, team, user, db)
+        record_assignment(request, order, technician, user, db)
+        team = None
+    else:
+        order = db.scalar(
+            select(WorkOrder)
+            .where(WorkOrder.id == data.work_order_id, WorkOrder.request_id == request.id)
+            .with_for_update()
+        )
+        if order is None or order.status == WorkStatus.completed:
+            raise HTTPException(409, "The work order changed. Refresh the request and try again")
+
+    start, end = order.scheduled_start, order.scheduled_end
+    if data.schedule is not None:
+        start, end = planned_slot(request, data.schedule)
+
+    lead_id = team.technician_id if team is not None else order.technician_id
+    assistant_ids = (
+        team.assistant_ids if team is not None else [member.id for member in order.assistants]
+    )
+    if team is not None or (data.schedule is not None and start is not None):
+        technicians = lock_eligible_team(request.branch_id, lead_id, assistant_ids, db)
+        if start is not None:
+            ensure_schedule_available(db, order, set(technicians), start, end)
+        if team is not None:
+            if team.previous_technician_id != order.technician_id:
+                raise HTTPException(
+                    409, "The assignment changed. Refresh the request and try again"
+                )
+            if lead_id != order.technician_id:
+                if not team.reason:
+                    raise HTTPException(422, "Enter a reason for changing the lead technician")
+                record_reassignment(order, order.lead, technicians[lead_id], team.reason, user, db)
+                order.lead = technicians[lead_id]
+            record_team(order, [technicians[member_id] for member_id in assistant_ids], user, db)
+    if data.schedule is not None:
+        record_schedule(order, start, end, user, db)
+    if data.price is not None:
+        record_price(request, order, data.price, user, db)

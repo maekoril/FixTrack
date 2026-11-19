@@ -1,4 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
+import { EmptyState, PageHeader, Skeleton } from './UI';
+import { formatMoney, formatReportDate } from './format';
 
 type Totals = {
   closed_requests: number;
@@ -19,6 +21,11 @@ const metrics = [
   ['materials_cost', 'Materials cost'],
   ['total_cost', 'Total cost'],
 ] as const;
+
+function valueFor(row: Totals, key: keyof Totals) {
+  const value = row[key];
+  return typeof value === 'string' ? formatMoney(value) : value.toLocaleString('en-PH');
+}
 
 export function Reports({ token, branches, onExpired }: {
   token: string; branches: { id: string; name: string }[]; onExpired: () => void;
@@ -75,10 +82,7 @@ export function Reports({ token, branches, onExpired }: {
   }
 
   return <section aria-labelledby="reports-title">
-    <header className="section-heading">
-      <div><h1 id="reports-title">Repair reports</h1>
-        <p className="muted">Review verified closures and costs for completed work, including follow-ups.</p></div>
-    </header>
+    <PageHeader id="reports-title" title="Repair reports" description="Compare repair volume and recorded costs across branches." />
     <form className="card report-filters" onSubmit={submit}>
       <label>Branch<select name="branch_id" defaultValue={filters.get('branch_id') ?? ''}>
         <option value="">All accessible branches</option>
@@ -89,24 +93,35 @@ export function Reports({ token, branches, onExpired }: {
       <button type="submit">Run report</button>
     </form>
     {error && <p className="error" role="alert">{error}</p>}
-    {!report && !error && <p role="status">Loading repair report…</p>}
+    {!report && !error && <Skeleton label="Loading repair report…" />}
     {report && <section className="card report-results" aria-labelledby="report-period">
-      <h2 id="report-period">Branch summary</h2>
-      <p className="muted">{filters.get('start_date')} to {filters.get('end_date')} (UTC, both dates included)</p>
-      {report.branches.length ? <div className="report-table-scroll" role="region" aria-label="Repair report by branch" tabIndex={0}>
-        <table className="report-table" aria-labelledby="report-period">
-          <thead><tr><th scope="col">Branch</th>
-            {metrics.map(([key, label]) => <th scope="col" key={key}>{label}</th>)}
+      <div className="queue-heading"><h2 id="report-period">Branch summary</h2>
+        <p className="muted">{formatReportDate(filters.get('start_date')!)}–{formatReportDate(filters.get('end_date')!)} · UTC, inclusive</p></div>
+      {report.branches.length ? <div className="report-table-wrap">
+        <table className="report-table" role="table" aria-labelledby="report-period">
+          <thead role="rowgroup"><tr role="row"><th role="columnheader" scope="col">Branch</th>
+            {metrics.map(([key, label]) => <th role="columnheader" scope="col" key={key}>{label}</th>)}
           </tr></thead>
-          <tbody>{report.branches.map(branch => <tr key={branch.branch_id}>
-            <th scope="row">{branch.branch_name}</th>
-            {metrics.map(([key]) => <td key={key}>{branch[key]}</td>)}
-          </tr>)}</tbody>
-          <tfoot><tr><th scope="row">Total</th>
-            {metrics.map(([key]) => <td key={key}>{report.totals[key]}</td>)}
+          <tbody role="rowgroup">{report.branches.map(branch => {
+            const total = Number(report.totals.total_cost);
+            const share = total > 0 ? Number(branch.total_cost) / total * 100 : 0;
+            return <tr key={branch.branch_id} role="row">
+              <th scope="row" role="rowheader">{branch.branch_name}</th>
+              {metrics.map(([key, label]) => <td key={key} role="cell">
+                <span className="report-mobile-label" aria-hidden="true">{label}</span>
+                <span>{valueFor(branch, key)}</span>
+                {key === 'total_cost' && <div className="cost-share" title={`${share.toFixed(1)}% of reported cost`}>
+                  <span className="sr-only">{share.toFixed(1)}% of reported cost</span>
+                  <span style={{ width: `${share}%` }} aria-hidden="true" />
+                </div>}
+              </td>)}
+            </tr>;
+          })}</tbody>
+          <tfoot role="rowgroup"><tr role="row"><th scope="row" role="rowheader">Total</th>
+            {metrics.map(([key, label]) => <td key={key} role="cell"><span className="report-mobile-label" aria-hidden="true">{label}</span><span>{valueFor(report.totals, key)}</span></td>)}
           </tr></tfoot>
         </table>
-      </div> : <p>No accessible branches.</p>}
+      </div> : <EmptyState icon="report" title="No accessible branches." />}
     </section>}
   </section>;
 }

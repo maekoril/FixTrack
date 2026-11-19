@@ -1,5 +1,5 @@
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 
 import pytest
@@ -57,6 +57,314 @@ def report(branch_id, **overrides):
         "location": "Meeting room",
         **overrides,
     }
+
+
+@pytest.fixture
+def budget_order(client, account, people):
+    branch, _, manager, _, _, technician = people
+    request = client.post("/api/requests", headers=auth(manager), json=report(branch.id)).json()
+    path = f"/api/requests/{request['id']}"
+    result = client.patch(
+        f"{path}/estimate",
+        headers=auth(account),
+        json={"difficulty": None, "duration_override_minutes": 120},
+    )
+    assert result.status_code == 200
+    order = client.post(
+        f"{path}/work-orders", headers=auth(account), json={"technician_id": str(technician.id)}
+    ).json()
+    return path, f"{path}/work-orders/{order['id']}", technician
+
+
+def material_quote(**overrides):
+    return {
+        "hourly_rate": "250.00",
+        "materials_items": [
+            {"name": "Faucet", "quantity": "1", "unit_price": "450", "source": "Supplier quote A"},
+            {"name": "Tape", "quantity": "2", "unit_price": "25", "source": "Price list Nov 19"},
+        ],
+        **overrides,
+    }
+
+
+def test_itemized_budget_approval_and_overrun_completion(client, db, account, people, budget_order):
+    path, work, technician = budget_order
+    admin, tech = auth(account), auth(technician)
+    first = client.patch(f"{work}/price", headers=admin, json=material_quote())
+    assert first.status_code == 200, first.text
+    quote = first.json()["price_estimate"]
+    assert quote["labor_estimate"] == "500.00"
+    assert quote["materials_estimate"] == "500.00"
+    assert quote["amount"] == "1000.00" and quote["version"] == 1
+    assert quote["materials_items"][1]["total"] == "50.00"
+    # Repeating the same draft must not manufacture a new version.
+    repeated = client.patch(f"{work}/price", headers=admin, json=material_quote()).json()
+    assert repeated["price_estimate"] == quote
+    approval = {"version": 1}
+    approved = client.post(f"{work}/price/approve", headers=admin, json=approval)
+    assert approved.status_code == 200
+    snapshot = approved.json()["approved_price"]
+    assert snapshot["quote"] == quote
+    assert snapshot["approved_by"] == str(account.id)
+    assert snapshot["approved_by_name"] == account.full_name
+    assert snapshot["approved_at"]
+    retry = client.post(f"{work}/price/approve", headers=admin, json=approval)
+    assert retry.json()["approved_price"] == snapshot
+
+    # A newer draft cannot silently raise the approved spending baseline.
+    revised = client.patch(
+        f"{work}/price", headers=admin, json=material_quote(hourly_rate="500.00")
+    ).json()
+    assert revised["price_estimate"]["version"] == 2
+    assert revised["approved_price"] == snapshot
+    assert client.post(f"{work}/price/approve", headers=admin, json=approval).status_code == 409
+    assert client.post(f"{work}/start", headers=tech).status_code == 200
+    costs = {"labor_cost": "600.00", "materials_cost": "500.00"}
+    for reason in ("", "   "):
+        failed = client.post(
+            f"{work}/complete", headers=tech, json=costs | {"overrun_reason": reason}
+        )
+        assert failed.status_code == 422
+    detail = client.get(path, headers=admin).json()
+    assert detail["status"] == "in_progress"
+    assert detail["work_orders"][0]["labor_cost"] == "0.00"
+    assert not any(event["action"] == "work_completed" for event in detail["events"])
+    costs["overrun_reason"] = "Additional hour required to remove corroded fittings."
+    for _ in range(2):
+        finished = client.post(f"{work}/complete", headers=tech, json=costs)
+        assert finished.status_code == 200, finished.text
+        assert finished.json()["overrun_reason"] == costs["overrun_reason"]
+        assert finished.json()["approved_price"] == snapshot
+    assert (
+        client.post(f"{work}/price/approve", headers=admin, json={"version": 2}).status_code == 409
+    )
+    detail = client.get(path, headers=admin).json()
+    assert [event["action"] for event in detail["events"]].count("work_completed") == 1
+    approvals = [event for event in detail["events"] if event["action"] == "work_price_approved"]
+    assert len(approvals) == 1 and approvals[0]["details"]["approval"] == snapshot
+    manager_detail = client.get(path, headers=auth(people[2])).json()
+    assert manager_detail["work_orders"] == []
+    assert not any(event["action"] == "work_price_approved" for event in manager_detail["events"])
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"quantity": "0"},
+        {"quantity": "-1"},
+        {"quantity": "0.0001"},
+        {"unit_price": "-1"},
+        {"unit_price": "NaN"},
+        {"unit_price": "1.001"},
+        {"source": "  "},
+        {"name": " "},
+        {"quantity": "1000001"},
+        {"quantity": "1000000", "unit_price": "9999999999.99"},
+    ],
+)
+def test_invalid_budget_items_do_not_save(client, account, budget_order, change):
+    path, work, _ = budget_order
+    data = material_quote()
+    data["materials_items"][0].update(change)
+    result = client.patch(f"{work}/price", headers=auth(account), json=data)
+    assert result.status_code == 422, result.text
+    detail = client.get(path, headers=auth(account)).json()
+    assert detail["work_orders"][0]["price_estimate"] is None
+    assert not any(event["action"] == "work_price_changed" for event in detail["events"])
+
+
+def test_budget_rounding_reapproval_and_access(client, db, account, people, budget_order):
+    path, work, technician = budget_order
+    admin = auth(account)
+    assert (
+        client.post(f"{work}/price/approve", headers=admin, json={"version": 0}).status_code == 409
+    )
+    data = material_quote(
+        hourly_rate="0",
+        materials_items=[
+            {"name": "Cable", "quantity": "0.125", "unit_price": "1", "source": "Quote B"},
+            {"name": "Hose", "quantity": "0.125", "unit_price": "1", "source": "Quote B"},
+        ],
+    )
+    quote = client.patch(f"{work}/price", headers=admin, json=data).json()["price_estimate"]
+    assert quote["amount"] == "0.26"  # Round individual lines, then sum.
+    for user in (people[2], technician):
+        assert (
+            client.post(
+                f"{work}/price/approve", headers=auth(user), json={"version": 1}
+            ).status_code
+            == 403
+        )
+    first = client.post(f"{work}/price/approve", headers=admin, json={"version": 1}).json()[
+        "approved_price"
+    ]
+    zero = client.patch(
+        f"{work}/price", headers=admin, json=material_quote(hourly_rate="0", materials_items=[])
+    )
+    assert zero.json()["price_estimate"]["amount"] == "0.00"
+    second = client.post(f"{work}/price/approve", headers=admin, json={"version": 2})
+    assert second.status_code == 200
+    assert second.json()["approved_price"]["quote"]["amount"] == "0.00"
+    history = client.get(path, headers=admin).json()["events"]
+    approvals = [event for event in history if event["action"] == "work_price_approved"]
+    assert len(approvals) == 2
+    replacement = next(
+        event for event in approvals if event["details"]["approval"]["quote"]["version"] == 2
+    )
+    assert replacement["details"]["previous_approval"] == first
+    db.query(BranchAccess).filter(BranchAccess.user_id == account.id).delete()
+    db.commit()
+    assert (
+        client.post(f"{work}/price/approve", headers=admin, json={"version": 2}).status_code == 404
+    )
+
+
+def test_legacy_estimates_and_completion_without_overrun(client, db, account, budget_order):
+    from app.models import WorkOrder
+
+    path, work, technician = budget_order
+    admin, tech = auth(account), auth(technician)
+    quote = client.patch(
+        f"{work}/price", headers=admin, json={"hourly_rate": "250", "materials_estimate": "500"}
+    ).json()["price_estimate"]
+    # Simulate a saved pre-migration quote that has no version or itemization.
+    legacy = {
+        key: value
+        for key, value in quote.items()
+        if key not in ("version", "materials_items", "labor_estimate")
+    }
+    order = db.get(WorkOrder, uuid.UUID(work.rsplit("/", 1)[1]))
+    order.price_estimate = legacy
+    db.commit()
+    approved = client.post(f"{work}/price/approve", headers=admin, json={"version": 0})
+    assert approved.json()["approved_price"]["quote"] == legacy
+    assert client.post(f"{work}/start", headers=tech).status_code == 200
+    done = client.post(
+        f"{work}/complete", headers=tech, json={"labor_cost": "500", "materials_cost": "500"}
+    )
+    assert done.status_code == 200 and done.json()["overrun_reason"] is None
+
+
+def test_mark_all_notifications_read_is_scoped_and_ignores_inbox_limit(client, db, account, people):
+    branch, outside, manager, _, outsider, technician = people
+    admin = auth(account)
+    inbox = "/api/notifications"
+    request = client.post("/api/requests", headers=auth(manager), json=report(branch.id)).json()
+    hidden = client.post("/api/requests", headers=auth(outsider), json=report(outside.id)).json()
+    db.add_all(
+        RequestEvent(
+            request_id=uuid.UUID(request["id"]), actor_id=technician.id, action="work_completed"
+        )
+        for _ in range(51)
+    )
+    other = User(
+        email="other-admin@example.com",
+        full_name="Other Admin",
+        role=Role.administrator,
+        password_hash=account.password_hash,
+    )
+    db.add(other)
+    db.flush()
+    db.add(BranchAccess(user_id=other.id, branch_id=branch.id))
+    db.commit()
+
+    before = client.get(inbox, headers=admin).json()
+    assert before["unread"] == 52 and len(before["items"]) == 50
+    for _ in range(2):
+        assert client.put(f"{inbox}/read", headers=admin).status_code == 204
+    assert client.get(inbox, headers=admin).json()["unread"] == 0
+    updates = client.get(inbox, headers=admin, params={"category": "update"}).json()["items"]
+    assert len(updates) == 1 and updates[0]["read"]
+    assert client.get(inbox, headers=auth(other)).json()["unread"] == 52
+
+    db.add(BranchAccess(user_id=account.id, branch_id=outside.id))
+    db.commit()
+    visible = client.get(inbox, headers=admin).json()
+    assert visible["unread"] == 1
+    assert visible["items"][0]["request_id"] == hidden["id"] and not visible["items"][0]["read"]
+
+
+def test_request_setup_saves_together_and_flags_missing_fields(client, db, account, people):
+    branch, _, manager, _, _, technician = people
+    admin = auth(account)
+    manager_auth = auth(manager)
+    queue = "/api/requests"
+    db.add(ServiceCategory(id="plumbing", name="Plumbing"))
+    db.commit()
+    created = client.post(queue, headers=manager_auth, json=report(branch.id)).json()
+    path = f"{queue}/{created['id']}"
+    initial = client.get(queue, headers=admin).json()[0]
+    assert initial["setup_missing"] == [
+        "Priority",
+        "Category",
+        "Difficulty",
+        "Service duration",
+        "Lead technician",
+        "Schedule",
+        "Price estimate",
+    ]
+    assert client.get(path, headers=manager_auth).json()["setup_missing"] is None
+    assert client.patch(f"{path}/setup", headers=manager_auth, json={}).status_code == 403
+
+    partial = client.patch(f"{path}/setup", headers=admin, json={"priority": "high"})
+    assert partial.status_code == 200
+    assert "Priority" not in partial.json()["setup_missing"]
+    assert "Schedule" in partial.json()["setup_missing"]
+    assert "Priority" not in client.get(queue, headers=admin).json()[0]["setup_missing"]
+
+    start = datetime.now(timezone.utc) + timedelta(days=1)
+    data = {
+        "priority": "urgent",
+        "category": {"category_id": "plumbing"},
+        "estimate": {"difficulty": "moderate", "duration_override_minutes": None},
+        "team": {"technician_id": str(technician.id)},
+        "schedule": {"scheduled_start": start.isoformat()},
+        "price": {"hourly_rate": "200.00", "materials_estimate": "75.00"},
+    }
+    invalid_price = data | {"price": data["price"] | {"override": "250.00"}}
+    assert client.patch(f"{path}/setup", headers=admin, json=invalid_price).status_code == 422
+    unchanged = client.get(path, headers=admin).json()
+    assert unchanged["priority"] == "high"
+    assert unchanged["category"] is None
+    assert unchanged["work_orders"] == []
+    assert {event["action"] for event in unchanged["events"]} == {"submitted", "priority_changed"}
+
+    saved = client.patch(f"{path}/setup", headers=admin, json=data)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["setup_missing"] == []
+    detail = client.get(path, headers=admin).json()
+    assert detail["setup_missing"] == []
+    assert client.get(queue, headers=admin).json()[0]["setup_missing"] == []
+    [order] = detail["work_orders"]
+    assert order["scheduled_end"] == (start + timedelta(hours=1)).isoformat()
+    assert order["price_estimate"]["amount"] == "275.00"
+    assert {"work_order_assigned", "work_schedule_changed", "work_price_changed"} <= {
+        event["action"] for event in detail["events"]
+    }
+    assert client.get(path, headers=manager_auth).json()["appointment"]["scheduled_start"] == (
+        start.isoformat()
+    )
+
+    clear_schedule = {"work_order_id": order["id"], "schedule": {"scheduled_start": None}}
+    assert client.patch(f"{path}/setup", headers=admin, json=clear_schedule).status_code == 200
+    assert client.get(queue, headers=admin).json()[0]["setup_missing"] == ["Schedule"]
+    db.add(ServiceCategory(id="carpentry", name="Carpentry"))
+    db.commit()
+    partial_category = client.patch(
+        f"{path}/setup",
+        headers=admin,
+        json={
+            "work_order_id": order["id"],
+            "category": {"category_id": "carpentry"},
+        },
+    )
+    assert partial_category.status_code == 200
+    assert partial_category.json()["setup_missing"] == ["Service duration", "Schedule"]
+    # Unchanged saved prices are snapshots, so partial planning edits need not reprice them.
+    assert (
+        client.get(path, headers=admin).json()["work_orders"][0]["price_estimate"]
+        == order["price_estimate"]
+    )
 
 
 def test_categories_in_triage_and_queue(client, db, account, people):
@@ -252,7 +560,11 @@ def test_team_scheduling_pricing_and_verification(client, db, account, people):
     def patch(order, action, **fields):
         return client.patch(f"{order}/{action}", headers=admin, json=fields)
 
-    slot = "2027-01-04T09:00:00+08:00"
+    local_zone = timezone(timedelta(hours=8))
+    now = datetime.now(local_zone)
+    start = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+    end = start + timedelta(minutes=90)
+    slot = start.isoformat()
     assert patch(first_order, "schedule", scheduled_start=slot).status_code == 422
     assert (
         client.patch(
@@ -264,9 +576,12 @@ def test_team_scheduling_pricing_and_verification(client, db, account, people):
     )
     scheduled = patch(first_order, "schedule", scheduled_start=slot)
     assert scheduled.status_code == 200
-    assert scheduled.json()["scheduled_end"] == "2027-01-04T02:30:00+00:00"
+    assert scheduled.json()["scheduled_end"] == end.astimezone(timezone.utc).isoformat()
+    past = patch(first_order, "schedule", scheduled_start=(now - timedelta(minutes=1)).isoformat())
+    assert past.status_code == 422
+    assert past.json()["detail"] == "Choose a planned start time in the future"
     appointment = client.get(first, headers=auth(manager)).json()["appointment"]
-    assert appointment["scheduled_start"] == "2027-01-04T01:00:00+00:00"
+    assert appointment["scheduled_start"] == start.astimezone(timezone.utc).isoformat()
     assert (
         patch(second_order, "schedule", scheduled_start=slot, duration_minutes=60).status_code
         == 409
@@ -293,7 +608,7 @@ def test_team_scheduling_pricing_and_verification(client, db, account, people):
         patch(
             second_order,
             "schedule",
-            scheduled_start="2027-01-04T10:30:00+08:00",
+            scheduled_start=end.isoformat(),
             duration_minutes=60,
         ).status_code
         == 200
@@ -558,7 +873,7 @@ def test_validation_and_role_rules(client, account, people):
             client.post("/api/requests", headers=auth(user), json=report(branch.id)).status_code
             == 403
         )
-    for changes in [{"title": "  "}, {"description": "short"}, {"location": " "}]:
+    for changes in [{"title": "  "}, {"description": " "}, {"location": " "}]:
         assert (
             client.post(
                 "/api/requests", headers=auth(branch_manager), json=report(branch.id, **changes)
@@ -764,6 +1079,8 @@ def test_technician_logs_and_completes_work(client, account, db, people):
     submitted = client.get(inbox, headers=admin).json()
     assert submitted["unread"] == 1
     assert submitted["items"][0]["action"] == "submitted"
+    assert submitted["items"][0]["category"] == "update"
+    assert client.get(inbox, headers=admin, params={"category": "update"}).json() == submitted
     read = f"{inbox}/{submitted['items'][0]['id']}/read"
     assert client.put(read, headers=manager_auth).status_code == 404
     for _ in range(2):
@@ -813,6 +1130,13 @@ def test_technician_logs_and_completes_work(client, account, db, people):
     assert manager_detail["work_orders"] == []
     assert manager_detail["maintenance_logs"] == [log.json()]
     assert client.get(inbox, headers=admin).json()["items"][0]["action"] == "work_completed"
+    approvals = client.get(inbox, headers=admin, params={"category": "approval"}).json()
+    assert approvals["unread"] == 1
+    [approval] = approvals["items"]
+    assert approval["category"] == "approval"
+    assert client.get(inbox, headers=admin, params={"category": "completed"}).json()["items"] == []
+    manager_completed = client.get(inbox, headers=manager_auth, params={"category": "completed"})
+    assert [item["action"] for item in manager_completed.json()["items"]] == ["work_completed"]
     assert {item["action"] for item in client.get(inbox, headers=manager_auth).json()["items"]} == {
         "work_started",
         "maintenance_logged",
@@ -838,6 +1162,13 @@ def test_technician_logs_and_completes_work(client, account, db, people):
     follow_up_path = f"{path}/work-orders/{follow_up['id']}"
     assert client.post(f"{follow_up_path}/start", headers=tech).status_code == 200
     assert client.post(f"{follow_up_path}/complete", headers=tech, json=costs).status_code == 200
+    current = client.get(inbox, headers=admin, params={"category": "approval"}).json()
+    [pending_review] = current["items"]
+    assert pending_review["id"] != approval["id"]
+    assert current["unread"] == 2
+    assert client.put(f"{inbox}/{pending_review['id']}/read", headers=admin).status_code == 204
+    marked = client.get(inbox, headers=admin, params={"category": "approval"}).json()
+    assert marked["unread"] == 1 and marked["items"][0]["read"]
     assert client.post(f"{path}/verify", headers=admin, json=review).status_code == 409
     closed = client.post(
         f"{path}/verify",
@@ -846,6 +1177,9 @@ def test_technician_logs_and_completes_work(client, account, db, people):
     )
     assert closed.status_code == 200
     assert closed.json()["status"] == "closed"
+    assert client.get(inbox, headers=admin, params={"category": "approval"}).json()["items"] == []
+    finished = client.get(inbox, headers=admin, params={"category": "completed"}).json()["items"]
+    assert {item["id"] for item in finished} == {approval["id"], pending_review["id"]}
     saved = db.get(ServiceRequest, uuid.UUID(created["id"]))
     assert saved.closed_by == account.id and saved.closed_at is not None
     detail = client.get(path, headers=admin).json()

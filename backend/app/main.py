@@ -7,9 +7,11 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.admin import router as admin_router
+from app.ai import router as ai_router
 from app.assets import router as assets_router
 from app.config import get_settings
 from app.db import get_db
+from app.intake import router as intake_router
 from app.models import Branch, BranchAccess, Role, User
 from app.notifications import router as notifications_router
 from app.photos import router as photos_router
@@ -28,6 +30,8 @@ app.add_middleware(
 app.include_router(admin_router)
 app.include_router(assets_router)
 app.include_router(requests_router)
+app.include_router(intake_router)
+app.include_router(ai_router)
 app.include_router(notifications_router)
 app.include_router(photos_router)
 app.include_router(reports_router)
