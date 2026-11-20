@@ -555,12 +555,12 @@ def detail(
     request = db.scalar(visible(user, db).where(ServiceRequest.id == request_id))
     if request is None:
         raise HTTPException(404, "Service request not found")
-    events = db.execute(
+    event_query = (
         select(RequestEvent, User.full_name)
         .join(User, User.id == RequestEvent.actor_id)
         .where(RequestEvent.request_id == request.id)
         .order_by(RequestEvent.created_at, RequestEvent.id)
-    ).all()
+    )
     technicians = None
     if user.role == Role.administrator and request.status != RequestStatus.closed:
         technicians = technician_options(request, db)
@@ -574,6 +574,16 @@ def detail(
                 selectinload(WorkOrder.lead), selectinload(WorkOrder.assistants)
             ).order_by(WorkOrder.created_at, WorkOrder.id)
         ).all()
+    if user.role != Role.administrator:
+        budget_visible = RequestEvent.action.not_in(("work_price_changed", "work_price_approved"))
+        if user.role == Role.technician:
+            budget_visible = or_(
+                budget_visible,
+                RequestEvent.details["work_order_id"]
+                .as_string()
+                .in_([str(order.id) for order in work_orders]),
+            )
+        event_query = event_query.where(budget_visible)
     appointment = None
     if user.role == Role.branch_manager:
         appointment = db.scalar(
@@ -627,9 +637,7 @@ def detail(
                 created_at=event.created_at,
                 details=event.details,
             )
-            for event, name in events
-            if user.role != Role.branch_manager
-            or event.action not in ("work_price_changed", "work_price_approved")
+            for event, name in db.execute(event_query)
         ],
     }
 
@@ -1266,9 +1274,19 @@ def set_priority(
     return output(request, db)
 
 
+def require_not_awaiting_verification(request: ServiceRequest):
+    if request.status == RequestStatus.awaiting_verification:
+        raise HTTPException(
+            409,
+            "Job details are locked while awaiting verification. "
+            "Return the repair for follow-up to make changes.",
+        )
+
+
 def apply_priority(request: ServiceRequest, data: PriorityInput, user: User, db: Session):
     from app.intake import sync_confirmation
 
+    require_not_awaiting_verification(request)
     if request.priority != data.priority:
         previous = request.priority
         request.priority = data.priority
@@ -1303,6 +1321,7 @@ def set_category(
 def apply_category(request: ServiceRequest, data: CategoryInput, user: User, db: Session):
     from app.intake import sync_confirmation
 
+    require_not_awaiting_verification(request)
     category = db.get(ServiceCategory, data.category_id) if data.category_id is not None else None
     if data.category_id is not None and category is None:
         raise HTTPException(422, "Select a valid service category")
@@ -1342,6 +1361,7 @@ def set_estimate(
 
 
 def apply_estimate(request: ServiceRequest, data: EstimateInput, user: User, db: Session):
+    require_not_awaiting_verification(request)
     previous = {
         "difficulty": request.difficulty,
         "duration_override_minutes": request.duration_override_minutes,
@@ -1372,6 +1392,7 @@ def update_request_setup(
         raise HTTPException(404, "Service request not found")
     if request.status == RequestStatus.closed:
         raise HTTPException(409, "Closed requests cannot be edited")
+    require_not_awaiting_verification(request)
     try:
         if data.priority is not None:
             apply_priority(request, PriorityInput(priority=data.priority), user, db)

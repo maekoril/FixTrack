@@ -29,6 +29,8 @@
 | `GET /api/branches` | Branches explicitly granted to the current user |
 | `POST /api/admin/branches` | Create a branch and grant the creating administrator access |
 | `GET/POST /api/admin/users` | List managed users or create branch manager or technician accounts |
+| `PATCH /api/admin/users/{id}` | Edit a managed account's full name and email |
+| `DELETE /api/admin/users/{id}` | Delete a managed account without recorded activity; otherwise return 409 |
 | `PUT /api/admin/users/{id}/branches` | Replace a managed user's branch access |
 | `PATCH /api/admin/users/{id}/active` | Disable or enable a managed account |
 | `POST /api/requests` | Branch manager submission with optional registered asset |
@@ -45,7 +47,13 @@
 Administrator tools manage only branch managers and technicians whose complete branch access is
 within the administrator's scope. Both roles may have multiple branches.
 Administrators cannot grant branches they do not have. Administrator accounts are
-provisioned through the first-admin browser setup or the bootstrap CLI. These management endpoints can only create or disable branch managers and technicians.
+provisioned through the first-admin browser setup or the bootstrap CLI. Management endpoints create,
+edit, enable/disable, and delete branch manager and technician accounts. Profile edits retain roles,
+passwords, and branch grants and reject duplicate emails. Deletion removes branch grants and the
+account atomically; existing foreign keys block deletion when requests, assignments, logs, intake,
+or other recorded activity refer to the user. A blocked delete returns 409 and restores grants;
+administrators can disable the account instead. The UI confirms permanent deletion before sending
+the request. Deleted accounts cannot reuse existing login tokens. No migration is required.
 Creating a new branch grants the creator access. The current interface lets administrators
 create branches but does not rename or remove existing branches.
 

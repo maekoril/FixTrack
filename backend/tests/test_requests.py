@@ -87,6 +87,54 @@ def material_quote(**overrides):
     }
 
 
+@pytest.mark.parametrize(
+    ("endpoint", "payload"),
+    [
+        ("setup", {"priority": "urgent"}),
+        ("priority", {"priority": "urgent"}),
+        ("category", {"category_id": "plumbing"}),
+        ("estimate", {"difficulty": "hard", "duration_override_minutes": 240}),
+        ("triage-confirmation", {"category": "plumbing", "priority": "urgent"}),
+    ],
+)
+def test_awaiting_verification_locks_job_details(
+    client, db, account, budget_order, endpoint, payload
+):
+    db.add(ServiceCategory(id="plumbing", name="Plumbing"))
+    db.commit()
+    path, work, technician = budget_order
+    admin, tech = auth(account), auth(technician)
+    assert client.post(f"{work}/start", headers=tech).status_code == 200
+    assert (
+        client.post(
+            f"{work}/complete",
+            headers=tech,
+            json={"labor_cost": "100", "materials_cost": "50"},
+        ).status_code
+        == 200
+    )
+    before = client.get(path, headers=admin).json()
+    assert before["status"] == "awaiting_verification"
+    response = client.patch(f"{path}/{endpoint}", headers=admin, json=payload)
+    assert response.status_code == 409, response.text
+    assert client.get(path, headers=admin).json() == before
+
+    # Returning work reopens planning without changing the completed order.
+    returned = client.post(
+        f"{path}/return",
+        headers=admin,
+        json={
+            "work_order_id": work.rsplit("/", 1)[-1],
+            "technician_id": str(technician.id),
+            "reason": "Leak persists",
+        },
+    )
+    assert returned.status_code == 201, returned.text
+    assert client.patch(f"{path}/{endpoint}", headers=admin, json=payload).status_code == 200
+    detail = client.get(path, headers=admin).json()
+    assert detail["work_orders"][0] == before["work_orders"][0]
+
+
 def test_itemized_budget_approval_and_overrun_completion(client, db, account, people, budget_order):
     path, work, technician = budget_order
     admin, tech = auth(account), auth(technician)
@@ -622,6 +670,14 @@ def test_team_scheduling_pricing_and_verification(client, db, account, people):
     quote = patch(first_order, "price", **price, override="650", reason="Approved discount")
     assert quote.json()["price_estimate"]["amount"] == "650.00"
     assert quote.json()["price_estimate"]["suggested"] == "675.00"
+    assert (
+        client.post(
+            f"{first_order}/price/approve",
+            headers=admin,
+            json={"version": quote.json()["price_estimate"]["version"]},
+        ).status_code
+        == 200
+    )
 
     assistant_auth = auth(assistant)
     assert client.get(first, headers=assistant_auth).json()["work_orders"][0]["id"] == first_id
@@ -647,7 +703,40 @@ def test_team_scheduling_pricing_and_verification(client, db, account, people):
         client.post(f"{first_order}/complete", headers=auth(lead), json=actual).status_code == 200
     )
     assert patch(first_order, "price", **price).status_code == 409
-    review = client.post(f"{first}/verify", headers=admin, json={"work_order_id": first_id})
+    follow_up = client.post(
+        f"{first}/return",
+        headers=admin,
+        json={
+            "work_order_id": first_id,
+            "technician_id": str(second_lead.id),
+            "reason": "Check the seal again",
+        },
+    )
+    assert follow_up.status_code == 201
+    follow_up_id = follow_up.json()["id"]
+    follow_up_path = f"{first}/work-orders/{follow_up_id}"
+    assert patch(follow_up_path, "price", **price).status_code == 200
+
+    def budget_orders(user):
+        events = client.get(first, headers=auth(user)).json()["events"]
+        return {
+            event["details"]["work_order_id"]
+            for event in events
+            if event["action"] in ("work_price_changed", "work_price_approved")
+        }
+
+    assert budget_orders(account) == {first_id, follow_up_id}
+    assert budget_orders(lead) == budget_orders(assistant) == {first_id}
+    assert budget_orders(second_lead) == {follow_up_id}
+    assert budget_orders(manager) == set()
+    assert client.post(f"{follow_up_path}/start", headers=auth(second_lead)).status_code == 200
+    assert (
+        client.post(
+            f"{follow_up_path}/complete", headers=auth(second_lead), json=actual
+        ).status_code
+        == 200
+    )
+    review = client.post(f"{first}/verify", headers=admin, json={"work_order_id": follow_up_id})
     assert review.status_code == 200
     assert review.json()["status"] == "closed"
 

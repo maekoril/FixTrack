@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Icon } from './Icon';
-import { Button, Chip, Drawer, EmptyState, PageHeader, RoleBadge, Skeleton } from './UI';
+import { Button, Chip, ConfirmDialog, Drawer, EmptyState, PageHeader, RoleBadge, Skeleton } from './UI';
 
 type Branch = { id: string; name: string; location: string };
 type ServiceCategory = { id: string; name: string };
@@ -12,6 +12,7 @@ type Props = { token: string; branches: Branch[]; refreshBranches: () => Promise
 export function Admin({ token, branches, refreshBranches, onExpired }: Props) {
   const [dialog, setDialog] = useState<'branch' | 'account' | null>(null);
   const [confirm, setConfirm] = useState<ManagedUser | null>(null);
+  const [confirmKind, setConfirmKind] = useState<'status' | 'delete'>('status');
   const [editing, setEditing] = useState('');
   const [search, setSearch] = useState('');
   const [role, setRole] = useState('');
@@ -34,7 +35,7 @@ export function Admin({ token, branches, refreshBranches, onExpired }: Props) {
       const data = await response.json().catch(() => ({}));
       throw new Error(typeof data.detail === 'string' ? data.detail : 'Check the form values and try again.');
     }
-    return response.json();
+    return response.status === 204 ? null : response.json();
   }
 
   async function loadUsers() { setUsers(await api('/admin/users')); }
@@ -119,7 +120,15 @@ export function Admin({ token, branches, refreshBranches, onExpired }: Props) {
         {!branches.length && <p className="note">Create a branch first.</p>}
       </>}
     </Drawer>}
-    {confirm && <Drawer title={confirm.is_active ? 'Disable account?' : 'Enable account?'} busy={busy} onClose={closeDialog}>
+    {confirm && confirmKind === 'delete' && <ConfirmDialog title="Delete account?"
+      description={`Permanently delete ${confirm.full_name} (${confirm.email})? This cannot be undone. Accounts with recorded activity must be disabled instead.`}
+      confirmLabel={busy ? 'Deleting…' : 'Delete account'} busy={busy} error={error} onCancel={closeDialog}
+      onConfirm={() => void mutate(async () => {
+        await api(`/admin/users/${confirm.id}`, 'DELETE');
+        setEditing(current => current === confirm.id ? '' : current);
+        await loadUsers(); setConfirm(null);
+      }, 'Account deleted.')} />}
+    {confirm && confirmKind === 'status' && <Drawer title={confirm.is_active ? 'Disable account?' : 'Enable account?'} busy={busy} onClose={closeDialog}>
       {error && <p className="error" role="alert">{error}</p>}
       <p><strong>{confirm.full_name}</strong> {confirm.is_active ? 'will lose access to FixTrack.' : 'will regain access to their assigned branches.'}</p>
       <div className="actions confirm-actions">
@@ -181,7 +190,7 @@ export function Admin({ token, branches, refreshBranches, onExpired }: Props) {
               <div className="account-actions">
                 <Button type="button" variant="secondary" id={`access-${user.id}`} aria-expanded={expanded}
                   aria-controls={expanded ? `editor-${user.id}` : undefined} disabled={busy}
-                  onClick={() => { setError(''); setEditing(expanded ? '' : user.id); }}>Edit access</Button>
+                  onClick={() => { setError(''); setEditing(expanded ? '' : user.id); }}>Edit account</Button>
                 <details className="row-disclosure account-menu" onKeyDown={event => {
                   if (event.key === 'Escape') {
                     event.currentTarget.open = false;
@@ -193,13 +202,33 @@ export function Admin({ token, branches, refreshBranches, onExpired }: Props) {
                     <Button variant={user.is_active ? 'danger' : 'secondary'} disabled={busy} onClick={event => {
                       const menu = event.currentTarget.closest('details')!;
                       menu.open = false; menu.querySelector('summary')?.focus();
-                      setError(''); setConfirm(user);
+                      setError(''); setConfirmKind('status'); setConfirm(user);
                     }}>{user.is_active ? 'Disable account' : 'Enable account'}</Button>
+                    <Button variant="danger" disabled={busy} onClick={event => {
+                      const menu = event.currentTarget.closest('details')!;
+                      menu.open = false; menu.querySelector('summary')?.focus();
+                      setError(''); setConfirmKind('delete'); setConfirm(user);
+                    }}>Delete account</Button>
                   </div>
                 </details>
               </div>
             </div>
             {expanded && <div className="account-editor" id={`editor-${user.id}`}>
+              <form onSubmit={event => {
+                event.preventDefault(); const data = new FormData(event.currentTarget);
+                void mutate(async () => {
+                  const updated: ManagedUser = await api(`/admin/users/${user.id}`, 'PATCH', {
+                    full_name: data.get('full_name'), email: data.get('email'),
+                  });
+                  setUsers(previous => previous.map(item => item.id === updated.id ? updated : item));
+                }, 'Account details saved.');
+              }}><fieldset disabled={busy}>
+                <label htmlFor={`name-${user.id}`}>Full name</label>
+                <input id={`name-${user.id}`} name="full_name" defaultValue={user.full_name} required maxLength={150} />
+                <label htmlFor={`email-${user.id}`}>Email</label>
+                <input id={`email-${user.id}`} name="email" type="email" defaultValue={user.email} required maxLength={254} />
+                <Button>Save details</Button>
+              </fieldset></form>
               <form onSubmit={event => {
                 event.preventDefault(); const data = new FormData(event.currentTarget);
                 void mutate(async () => {

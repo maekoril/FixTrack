@@ -3,7 +3,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from typing_extensions import Annotated
@@ -54,6 +54,12 @@ class AccessInput(BaseModel):
 
 class ActiveInput(BaseModel):
     is_active: bool
+
+
+class ProfileInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    full_name: Name
+    email: EmailStr
 
 
 class SpecializationInput(BaseModel):
@@ -172,6 +178,38 @@ def create_user(
         db.rollback()
         raise HTTPException(409, "That email already exists") from None
     return output(db, user)
+
+
+@router.patch("/users/{user_id}", response_model=UserOutput)
+def update_profile(
+    user_id: uuid.UUID,
+    data: ProfileInput,
+    actor: User = Depends(administrator),
+    db: Session = Depends(get_db),
+):
+    user = managed_user(db, actor, user_id)
+    user.full_name = data.full_name
+    user.email = str(data.email).lower()
+    commit(db)
+    return output(db, user)
+
+
+@router.delete("/users/{user_id}", status_code=204)
+def delete_user(
+    user_id: uuid.UUID,
+    actor: User = Depends(administrator),
+    db: Session = Depends(get_db),
+):
+    user = managed_user(db, actor, user_id)
+    db.execute(delete(BranchAccess).where(BranchAccess.user_id == user.id))
+    db.delete(user)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            409, "This account has recorded activity and cannot be deleted. Disable it instead."
+        ) from None
 
 
 @router.put("/users/{user_id}/branches", response_model=UserOutput)

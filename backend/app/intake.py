@@ -31,7 +31,7 @@ from app.models import (
     User,
 )
 from app.photos import prepare_image
-from app.requests import visible
+from app.requests import require_not_awaiting_verification, visible
 from app.security import current_user
 from app.triage_prompt import TRIAGE_PROMPT
 from app.triage_types import (
@@ -456,6 +456,7 @@ def confirm_intake(
     request = db.scalar(visible(user, db).where(ServiceRequest.id == request_id).with_for_update())
     if request is None:
         raise HTTPException(404, "Service request not found")
+    require_not_awaiting_verification(request)
     category_id = CATEGORY_IDS[data.category]
     if db.get(ServiceCategory, category_id) is None:
         raise HTTPException(422, "The intake categories are unavailable. Apply migrations first")

@@ -363,6 +363,7 @@ button.urgent-row:hover:not(:disabled) { background: var(--danger-soft); }
   border-top: 1px solid var(--line); animation: enter var(--enter) var(--ease);
 }
 .account-editor form { margin: 0; }
+.account-menu .row-popover { display: grid; gap: var(--space-2); }
 .account-editor .branch-checks { margin-top: 0; }
 .account-editor .actions, .drawer .branch-checks ~ button { margin-top: var(--space-2); }
 

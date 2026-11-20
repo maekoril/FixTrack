@@ -109,6 +109,38 @@ silently introduce mandatory approvals, evidence requirements, or new role permi
 
 ## Validation and repeatable acceptance
 
+The November 20 role review exercised manual submission, assignment, starting work, logging a
+repair while drafting costs, completion, verification, and the manager's closure history in
+desktop Chrome with disposable accounts and a SQLite database. The backend suite passed 116
+tests, including a follow-up assigned to a different lead that checks budget history for the
+administrator, manager, both leads, and a supporting technician. Five frontend tests and the
+production build passed.
+
+The existing local PostgreSQL database passed a read-only schema drift check. On disposable
+PostgreSQL 17, the migration chain upgraded, rolled back to base, and upgraded again with no
+schema drift. Concurrent API checks accepted one initial assignment and one overlapping
+appointment for a shared technician. Retried starts and completions each produced one event.
+When verification and return raced, only one decision committed and the stored request and
+work orders matched that decision.
+
+A separate live Groq check used fictional reports and a synthetic pipe illustration. Text and
+image intake suggested plumbing, an electrical spark received an urgent hazard flag, and a
+vague Tagalog report prompted follow-up questions. One vague-report run exhausted its retry
+and offered manual intake. Another succeeded and incorporated the answers. An estimate returned
+a duration, tasks, and material suggestions after the provider rejected its first structured
+response and the JSON fallback succeeded. Analysis alone created no ticket, and generating
+the estimate did not change the saved request. Translation and priority varied between runs:
+one translation introduced a cabinet absent from the report. The intake prompt now asks the
+model to preserve the subject and ground high priority in reported disruption. Users can expand
+the original report to compare it with the translation.
+
+Playwright exercised phone layouts with touch input in Chrome (Pixel 7 profile) and WebKit
+(iPhone 13 profile) on Windows. Both completed manager submission, admin assignment, technician
+logging and completion, admin verification, and manager closure history. Both selected and
+uploaded an additional issue photo, opened its preview, and uploaded a repair photo while
+retaining draft labor costs. The checks found no document-level horizontal overflow on the
+sampled screens. Native camera capture, OS permission dialogs, and physical phones were not tested.
+
 This review passed 111 backend tests, backend Ruff lint/format checks, the frontend build,
 and five frontend planning tests. Backend tests use SQLite and mocked AI providers, so they
 do not establish PostgreSQL concurrency behavior or live Groq output quality.

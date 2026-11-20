@@ -73,6 +73,7 @@ export function Requests({ token, role, userId, branches, onExpired, openedReque
   const [offset, setOffset] = useState(0);
   const [version, setVersion] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [queueError, setQueueError] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
@@ -116,7 +117,7 @@ export function Requests({ token, role, userId, branches, onExpired, openedReque
 
   useEffect(() => {
     const controller = new AbortController();
-    setLoading(true); setError('');
+    setLoading(true); setQueueError('');
     const query = new URLSearchParams({ offset: String(offset), limit: String(pageSize), search });
     if (branch) query.set('branch_id', branch);
     if (status) query.set('status', status);
@@ -129,9 +130,11 @@ export function Requests({ token, role, userId, branches, onExpired, openedReque
       pending = true;
       try {
         const result = await api(`?${query}`, 'GET', undefined, controller.signal);
-        if (!controller.signal.aborted) setItems(result);
+        if (!controller.signal.aborted) { setItems(result); setQueueError(''); }
       } catch (err) {
-        if (!background && !controller.signal.aborted && err instanceof Error) setError(err.message);
+        if (!background && !controller.signal.aborted && err instanceof Error) {
+          setItems([]); setQueueError(err.message);
+        }
       } finally {
         pending = false;
         if (!controller.signal.aborted) setLoading(false);
@@ -143,7 +146,8 @@ export function Requests({ token, role, userId, branches, onExpired, openedReque
   }, [branch, status, priority, categoryFilter, search, focus, offset, version, token]);
 
   useEffect(() => {
-    setDetail(null); setDetailFailed(false);
+    setDetail(current => current?.id === selected ? current : null);
+    setDetailFailed(false);
     if (!selected) return;
     const controller = new AbortController();
     let pending = false;
@@ -229,15 +233,17 @@ export function Requests({ token, role, userId, branches, onExpired, openedReque
         logs: 'Maintenance entry added.',
         complete: 'Work completed. The request is awaiting administrator verification.',
         'price/approve': 'Budget approved. This version is preserved for cost comparison.',
-        reassign: 'Work order reassigned.',
       }[operation]);
+      return true;
     } catch (err) { setError(err instanceof Error ? err.message : 'Unable to update work order.'); }
     finally { setBusy(false); }
   }
 
-  function submitWork(event: FormEvent<HTMLFormElement>, orderId: string, operation: 'logs' | 'complete') {
+  async function submitWork(event: FormEvent<HTMLFormElement>, orderId: string, operation: 'logs' | 'complete') {
     event.preventDefault();
-    void updateWork(orderId, operation, Object.fromEntries(new FormData(event.currentTarget)));
+    const form = event.currentTarget;
+    const saved = await updateWork(orderId, operation, Object.fromEntries(new FormData(form)));
+    if (saved && operation === 'logs') form.reset();
   }
 
   async function attachPhoto(event: FormEvent<HTMLFormElement>, orderId?: string) {
@@ -290,6 +296,7 @@ export function Requests({ token, role, userId, branches, onExpired, openedReque
       {role === 'branch_manager' && <button ref={reportButton} className={showForm ? 'secondary' : undefined} aria-expanded={showForm} disabled={!branches.length || busy} onClick={() => setShowForm(!showForm)}>{showForm ? 'Cancel' : <><Icon name="plus" size={18} />Report an issue</>}</button>}
     </PageHeader>
     {error && <p className="error" role="alert">{error}</p>}
+    {queueError && <p className="error" role="alert">{queueError}</p>}
     {categoryListError && <p className="error" role="alert">{categoryListError}</p>}
     {notice && <p className="success" role="status">{notice}</p>}
     {showForm && <section className="card report-form" aria-labelledby="report-title">
@@ -353,7 +360,7 @@ export function Requests({ token, role, userId, branches, onExpired, openedReque
       {selected && <button className="secondary back-to-queue" onClick={() => { setSelected(''); (selectedButton.current ?? queueHeading.current)?.focus(); }}><Icon name="back" size={16} />Back to queue</button>}
       {!selected ? <EmptyState icon="requests" title="Select a request">See its details and activity history.</EmptyState>
         : detailFailed ? <p>Unable to load this request. Select Refresh to try again.</p>
-        : !detail ? <Skeleton label="Loading details…" /> : <>
+        : detail?.id !== selected ? <Skeleton label="Loading details…" /> : <>
           <p className="reference">#{detail.id.slice(0, 8).toUpperCase()}</p><h2>{detail.title}</h2>
           <div className="actions"><span className={`badge status-${detail.status}`}>{label(detail.status)}</span><span className={`badge priority-${detail.priority}`}>{detail.priority ?? 'Not prioritized'}</span></div>
           <dl>
@@ -368,11 +375,13 @@ export function Requests({ token, role, userId, branches, onExpired, openedReque
             <dt>Reported by</dt><dd>{detail.submitted_by_name}</dd><dt>Submitted</dt><dd>{date(detail.created_at)}</dd>
           </dl>
           {detail.intake ? <IntakeDetails key={detail.id}
-            intake={detail.intake} canEdit={role === 'administrator' || role === 'branch_manager'} busy={busy} onConfirm={confirmIntake} />
+            intake={detail.intake} canEdit={detail.status !== 'awaiting_verification' && (role === 'administrator' || role === 'branch_manager')} busy={busy} onConfirm={confirmIntake} />
             : <><h3>Description</h3><p className="description">{detail.description}</p></>}
           <PhotoGallery key={`photos-${detail.id}`} token={token} requestId={detail.id} photos={detail.photos}
             busy={busy} onAdd={role === 'branch_manager' && detail.status !== 'closed' ? addIssuePhoto : undefined} />
-          {role === 'administrator' && detail.status !== 'closed' && detail.eligible_technicians && (
+          {role === 'administrator' && detail.status === 'awaiting_verification' &&
+            <p className="muted">Job details are locked while awaiting verification. Verify the repair or return it for follow-up to make changes.</p>}
+          {role === 'administrator' && ['submitted', 'in_progress'].includes(detail.status) && detail.eligible_technicians && (
             <RequestSetup key={JSON.stringify([detail.id, detail.priority, detail.category, detail.difficulty,
               detail.duration_override_minutes, detail.work_orders])} request={detail}
               order={[...detail.work_orders].reverse().find(order => order.status !== 'completed')}
@@ -438,7 +447,7 @@ export function Requests({ token, role, userId, branches, onExpired, openedReque
               </>}
             </section>)}
           </section>}
-          {role === 'administrator' && detail.status === 'awaiting_verification' && <section>
+          {role === 'administrator' && detail.status === 'awaiting_verification' && <section key={detail.work_orders.at(-1)?.id}>
             <h3>Review completed work</h3>
             <p className="muted">Review the work logs, repair photos, and actual costs before verifying or returning the repair.</p>
             <form onSubmit={event => reviewWork(event, 'verify')}>

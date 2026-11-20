@@ -87,37 +87,15 @@ export function PhotoGallery({ token, requestId, photos, busy = false, onAdd }: 
   token: string; requestId: string; photos: Photo[]; busy?: boolean; onAdd?: (file: File) => Promise<void>;
 }) {
   const [uploading, setUploading] = useState(false);
-  const [pickerError, setPickerError] = useState('');
+  const fileInput = useRef<HTMLInputElement>(null);
 
-  async function choosePhoto() {
-    if (!onAdd || busy || uploading) return;
-    setPickerError('');
-    const browser = window as Window & {
-      showOpenFilePicker?: (options: {
-        multiple: boolean;
-        types: { description: string; accept: Record<string, string[]> }[];
-      }) => Promise<FileSystemFileHandle[]>;
-    };
-    if (!browser.showOpenFilePicker) {
-      setPickerError('To add photos, open this page in Chrome or Edge on a computer.');
-      return;
-    }
-    try {
-      const [handle] = await browser.showOpenFilePicker({
-        multiple: false,
-        types: [{ description: 'Issue photos', accept: {
-          'image/jpeg': ['.jpg', '.jpeg'], 'image/png': ['.png'], 'image/webp': ['.webp'],
-        } }],
-      });
-      if (!handle) return;
-      const file = await handle.getFile();
-      setUploading(true);
-      await onAdd(file);
-    } catch (err) {
-      if (!(err instanceof DOMException && err.name === 'AbortError')) {
-        setPickerError(err instanceof Error ? err.message : 'Unable to open the photo picker.');
-      }
-    } finally { setUploading(false); }
+  async function addSelectedPhoto(input: HTMLInputElement) {
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file || !onAdd || busy || uploading) return;
+    setUploading(true);
+    try { await onAdd(file); }
+    finally { setUploading(false); }
   }
 
   if (!photos.length && !onAdd) return null;
@@ -126,11 +104,12 @@ export function PhotoGallery({ token, requestId, photos, busy = false, onAdd }: 
     <div className="photo-grid">{photos.map(photo => <PhotoTile key={photo.id} token={token}
       photo={photo} path={`/api/requests/${requestId}/photos/${photo.id}`} />)}
       {onAdd && <div className="photo-tile">
+        <input ref={fileInput} type="file" hidden accept={photoTypes}
+          onChange={event => void addSelectedPhoto(event.currentTarget)} />
         <button type="button" className="secondary photo-add" disabled={busy || uploading} aria-label={uploading ? 'Uploading photo' : 'Add issue photo'}
-          title="Add issue photo" onClick={() => void choosePhoto()}><Icon name="plus" size={28} /></button>
+          title="Add issue photo" onClick={() => fileInput.current?.click()}><Icon name="plus" size={28} /></button>
         <p className="photo-add-caption" role="status">{uploading ? 'Uploading…' : 'Add photo'}</p>
       </div>}
     </div>
-    {pickerError && <p className="error" role="alert">{pickerError}</p>}
   </section>;
 }

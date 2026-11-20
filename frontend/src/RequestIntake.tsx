@@ -183,6 +183,8 @@ export function IntakeDetails({ intake, canEdit, busy, onConfirm }: {
         onClick={() => { setCategory(intake.final_category ?? ''); setPriority(intake.final_priority ?? ''); setError(''); setEditing(!editing); }}>Edit</button>}
     </div>
     <p className="description">{intake.normalized_description || intake.original_description}</p>
+    {intake.normalized_description && intake.normalized_description !== intake.original_description &&
+      <details><summary>Original report</summary><p className="description">{intake.original_description}</p></details>}
     {!!intake.conversation.length && <details><summary>Follow-up answers</summary>{intake.conversation.flatMap((round, index) => round.answers.map(qa =>
       <p key={`${index}-${qa.question}`}><strong>{qa.question}</strong><br />{qa.answer}</p>))}</details>}
     <div id={editorId} hidden={!editing || !canEdit}>

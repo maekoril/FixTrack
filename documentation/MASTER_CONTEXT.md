@@ -56,6 +56,9 @@ At completion, the lead must explain actual totals above the last approved budge
 and assigned technicians see approved versus actual totals and the overrun explanation. Existing
 workflows without an approved budget remain available, with comparison shown as unavailable.
 The administrator still verifies or returns the repair; budget approval does not verify the work.
+Technicians see budget changes and approvals in activity history only for work orders on which
+they are currently a lead or supporting technician, including when a follow-up has a different team.
+Saving a maintenance entry or repair photo keeps other draft fields on the same work order.
 **AI request intake.** Reporters can review AI routing before creating a ticket. Groq supports
 English, Tagalog, and Taglish, proposes editable category/priority and safety flags, normalizes
 reports into English, and analyzes optional photos. Vague reports receive at most three questions
@@ -63,13 +66,11 @@ per round and two rounds; unresolved reports are saved as **Incomplete info** af
 Analysis alone never creates a ticket. People can continue manually before analysis or after a
 provider failure. Short reports such as “sira po” are accepted. Technician views default to the
 normalized text under **Description**, with follow-up answers collapsed by default. Original text
-remains stored in the intake record. Authorized users open **Edit** to change category and priority;
+is available under **Original report** when the normalized description differs. Authorized users open **Edit** to change category and priority;
 the form and AI confidence notes stay hidden until editing. Category and priority are otherwise
 shown in the request summary. Branch managers add issue photos through a plus tile beside existing
 thumbnails; choosing a file uploads it immediately with progress and error feedback. The plus tile
-uses the browser's native `showOpenFilePicker` without a file-input element. This upload control
-requires a supported desktop browser (Chrome/Edge) on localhost or HTTPS; unsupported browsers show
-an explanatory message.
+opens the browser's file chooser for a JPEG, PNG, or WebP on desktop or mobile.
 
 Intake photos are limited to 5 MB/24 megapixels, checked as JPEG/PNG/WebP, stripped of metadata,
 and resized to at most 1024 pixels before transfer. Only attached photos use the configured
@@ -114,6 +115,11 @@ state, so a provider error does not discard usable suggestions or re-enable dupl
 
 **Repair lifecycle.** The administrator reviews the latest completed work order and can verify and close the request with optional notes. Returning the repair requires instructions and an active technician in the request's branch. The request moves back to `in_progress` and a new assigned work order is created in the same transaction. Completed orders retain their logs and costs. Branch managers can follow the decision in the request history.
 
+While a repair awaits verification, request setup and intake routing are read-only. The server
+rejects changes to priority, category, difficulty, and duration, including direct API edits.
+Administrators can verify the repair or return it for follow-up; returning reopens planning
+for the new work order while preserving the completed order.
+
 - Request states modeled in the schema: `submitted → in_progress → awaiting_verification → closed`.
 - Work-order states modeled in the schema: `assigned → in_progress → completed`.
 - The active API handles submission, priority changes, initial assignment, starting work, maintenance entries, and technician completion. Administrators assign a submitted request with no existing work order to an active technician with access to its branch. The work order starts as `assigned` and the request stays `submitted`. In **Assigned requests**, the assigned technician can see the work-order status and choose **Start work**. This changes both records to `in_progress` and adds an activity event in the same transaction. While work is in progress, the technician can append diagnosis, progress, and repair entries. Completing work saves labor and materials costs, marks the order completed, moves the request to awaiting verification, and adds one completion event in the same transaction. Administrators can review logs and costs. Branch managers can read technician maintenance entries on their own accessible requests, including prior work orders, and follow completion in the activity history.
@@ -151,8 +157,12 @@ The interface uses a collapsible ink-navy sidebar, cool paper surfaces, cobalt-v
 and coral for urgent requests. The overview uses a compact KPI strip and links to the asset
 registry. The header keeps notifications and account options in two compact controls. The account
 menu shows the current role and opens a sign-out confirmation. Successful sign-out displays a
-brief toast on the sign-in page. Administrators can search and filter managed accounts, expand a row to edit branch
-access or specialization, and confirm account status changes. Branch and account creation use
+brief toast on the sign-in page. Administrators can search and filter managed accounts, expand a row to edit
+name/email, branch access, or specialization, and confirm account status changes. Account actions
+also offer permanent deletion in a small centered confirmation modal naming the account. Only accounts without
+recorded activity can be deleted; accounts linked to requests, assignments, or other records return
+a conflict and must be disabled instead. Failed deletion restores branch grants. Administrators
+and accounts outside the acting administrator's complete branch scope remain protected. Branch and account creation use
 drawers. Date displays use abbreviated month names and repair costs use Philippine peso formatting.
 Reduced-motion preferences disable animated transitions and KPI counts.
 

@@ -66,19 +66,21 @@ function useModalDialog() {
   return ref;
 }
 
-export function ConfirmDialog({ title, description, confirmLabel, onCancel, onConfirm }: {
+export function ConfirmDialog({ title, description, confirmLabel, onCancel, onConfirm, busy = false, error }: {
   title: string; description: string; confirmLabel: string; onCancel: () => void; onConfirm: () => void;
+  busy?: boolean; error?: string;
 }) {
   const ref = useModalDialog();
   const heading = useId();
   const message = useId();
-  return <dialog ref={ref} className="card confirm-dialog" aria-labelledby={heading} aria-describedby={message}
-    onCancel={event => { event.preventDefault(); onCancel(); }}>
+  return <dialog ref={ref} className="card confirm-dialog" aria-labelledby={heading} aria-describedby={message} aria-busy={busy}
+    onCancel={event => { event.preventDefault(); if (!busy) onCancel(); }}>
     <h2 id={heading}>{title}</h2>
     <p id={message} className="muted">{description}</p>
+    {error && <p className="error" role="alert">{error}</p>}
     <div className="actions confirm-actions">
-      <Button type="button" variant="secondary" onClick={onCancel}>Cancel</Button>
-      <Button type="button" variant="danger" onClick={onConfirm}>{confirmLabel}</Button>
+      <Button type="button" variant="secondary" disabled={busy} onClick={onCancel}>Cancel</Button>
+      <Button type="button" variant="danger" disabled={busy} onClick={onConfirm}>{confirmLabel}</Button>
     </div>
   </dialog>;
 }
